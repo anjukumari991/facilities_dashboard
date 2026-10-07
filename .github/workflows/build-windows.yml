@@ -1,0 +1,111 @@
+name: Build and release Windows executable
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag, for example v1.0.0
+        required: true
+        default: v1.0.0
+        type: string
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: dashboard/requirements.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r dashboard/requirements.txt pyinstaller
+
+      - name: Build single-file executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --windowed `
+            --name facilities_dashboard `
+            --paths dashboard `
+            --add-data "dashboard/static;static" `
+            --collect-data webview `
+            --hidden-import webview.platforms.qt `
+            dashboard/desktop_app.py
+
+      - name: Create SHA-256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "dist/facilities_dashboard.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  facilities_dashboard.exe" | Out-File "dist/facilities_dashboard.exe.sha256" -Encoding ascii
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: facilities_dashboard-windows
+          path: |
+            dist/facilities_dashboard.exe
+            dist/facilities_dashboard.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Resolve release tag
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            $tag = $env:REQUESTED_TAG
+          } else {
+            $tag = $env:GITHUB_REF_NAME
+          }
+
+          if ($tag -notmatch '^v[0-9A-Za-z][0-9A-Za-z._-]*$') {
+            throw "Release tag must start with v and contain only letters, numbers, dots, underscores, or hyphens."
+          }
+
+          "RELEASE_TAG=$tag" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Publish executable to GitHub Releases
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "$env:RELEASE_TAG" `
+              "dist/facilities_dashboard.exe" `
+              "dist/facilities_dashboard.exe.sha256" `
+              --clobber `
+              --repo "$env:GITHUB_REPOSITORY"
+          } else {
+            gh release create "$env:RELEASE_TAG" `
+              "dist/facilities_dashboard.exe" `
+              "dist/facilities_dashboard.exe.sha256" `
+              --target "$env:GITHUB_SHA" `
+              --title "Facilities Dashboard $env:RELEASE_TAG" `
+              --generate-notes `
+              --repo "$env:GITHUB_REPOSITORY"
+          }

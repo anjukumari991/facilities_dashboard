@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Facility Expense Report</title>
+  <link rel="stylesheet" href="styles.css?v=4">
+</head>
+<body>
+  <header class="topbar">
+    <div class="header-brand">
+      <img class="brand-logo" src="sequoia-logo.svg" alt="Sequoia">
+      <div>
+        <div class="eyebrow">OPERATIONS · EXECUTIVE VIEW</div>
+        <h1>Facility Expense Report</h1>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="button secondary desktop-action" id="openFolderButton" type="button">Open Base Folder</button>
+      <button class="button secondary desktop-action" id="changeFolderButton" type="button">Change base location</button>
+      <button class="button" id="refreshButton" type="button">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="setup-panel panel" id="setupPanel" hidden>
+      <div>
+        <span>Local data setup</span>
+        <h2 id="setupTitle">Choose where your expense files are kept</h2>
+        <p id="setupMessage">The app will create an <code>expenses</code> folder inside the directory you choose and remember it for future launches.</p>
+      </div>
+      <button class="button setup-button" id="chooseFolderButton" type="button">Choose base directory</button>
+    </section>
+
+    <div id="dashboardContent" hidden>
+    <section class="filterbar panel">
+      <label class="workbook-label">Workbook<select id="workbookFilter"></select></label>
+      <label>Report category<select id="groupFilter"></select></label>
+      <label>Through month<select id="monthFilter"></select></label>
+      <label>Lookback<select id="lookbackFilter"><option value="3" selected>3 months</option><option value="6">6 months</option><option value="12">12 months</option><option value="999">All available</option></select></label>
+      <div class="status" id="status" role="status" aria-live="polite">Ready</div>
+    </section>
+
+    <section class="kpis" id="kpis"></section>
+
+    <div class="section-heading">
+      <div><span>Category performance</span><h2>Latest month with three-month context</h2></div>
+      <p>All four categories remain visible here for comparison, independent of the report filter.</p>
+    </div>
+    <section class="bucket-grid" id="bucketCards"></section>
+
+    <section class="grid two-one">
+      <article class="panel chart-panel">
+        <div class="panel-title"><div><span>Monthly trajectory</span><h2>Where the money is going</h2><p>Stacked monthly spend in INR; totals appear above each month.</p></div><div class="legend" id="trendLegend"></div></div>
+        <div id="trendChart" class="chart"></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-title"><div><span>Change drivers</span><h2>What changed vs prior month</h2><p>Green means spend decreased; red means spend increased.</p></div></div>
+        <div id="varianceChart" class="chart"></div>
+      </article>
+    </section>
+
+    <section class="grid three-even">
+      <article class="panel chart-panel">
+        <div class="panel-title"><div><span>Cost concentration</span><h2>Top vendors in latest month</h2><p>Amount and share of selected spend.</p></div></div>
+        <div id="vendorChart" class="chart"></div>
+      </article>
+      <article class="panel chart-panel misc-panel">
+        <div class="panel-title"><div><span>Miscellaneous detail</span><h2>Spend by expense type</h2><p>Latest three calendar months, split by the expense types captured in Excel.</p></div><div class="legend" id="miscLegend"></div></div>
+        <div id="miscChart" class="chart"></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-title"><div><span>Lunch unit economics</span><h2>Cost per person by vendor</h2><p>Latest month; the green dashed line is the granted budget.</p></div><div class="unit-pill">Budget ₹200</div></div>
+        <div id="lunchChart" class="chart"></div>
+      </article>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-title"><div><span>Audit trail</span><h2>Latest-month expense detail</h2></div><div id="rowCount"></div></div>
+      <div class="table-scroll"><table><thead><tr><th>Report category</th><th>Vendor</th><th>Expense type</th><th class="numeric">Amount</th><th class="numeric">Actual count</th><th class="numeric">Cost / person</th></tr></thead><tbody id="detailRows"></tbody></table></div>
+    </section>
+    </div>
+
+  </main>
+  <footer class="site-footer">Made with <span aria-label="love">❤️</span> by Facilities Team (Anju and Suman) <span aria-label="sparkles">✨</span></footer>
+  <script src="dashboard.js?v=6"></script>
+</body>
+</html>
