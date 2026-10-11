@@ -1,8 +1,9 @@
 (function initialiseCollaborationDashboard(global){
   const STATUS_COLORS={completed:"#087f52",ongoing:"#d97706",planned:"#2f80ed"};
   const EXTRA_COLORS=["#8a63d2","#d9488c","#0891b2","#65a30d","#dc2626","#64748b","#0f766e"];
-  const TEAM_COLORS=["#087f52","#2f80ed","#8a63d2","#d97706","#0891b2","#d9488c","#65a30d","#0f766e","#dc2626","#64748b"];
+  const TEAM_COLORS=["#087f52","#2f80ed","#8a63d2","#d97706","#0891b2","#d9488c","#65a30d","#dc2626","#0f766e","#64748b","#c2410c","#4f46e5","#15803d","#be185d","#0369a1","#854d0e"];
   let payload={records:[],meta:{}};
+  let teamColors=new Map();
 
   const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
   const monthLabel=iso=>new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN",{month:"short",year:"numeric"});
@@ -25,10 +26,16 @@
     return EXTRA_COLORS[hash%EXTRA_COLORS.length];
   }
 
+  function assignTeamColors(){
+    const teams=[...new Set(payload.records.map(row=>row.department).filter(Boolean))].sort((left,right)=>left.localeCompare(right));
+    teamColors=new Map(teams.map((team,index)=>[
+      team,
+      TEAM_COLORS[index]||`hsl(${Math.round((index*137.508)%360)} 62% 42%)`,
+    ]));
+  }
+
   function teamColor(team){
-    let hash=0;
-    for(const character of String(team||""))hash=(hash*31+character.charCodeAt(0))>>>0;
-    return TEAM_COLORS[hash%TEAM_COLORS.length];
+    return teamColors.get(team)||TEAM_COLORS[0];
   }
 
   function options(select,values,allLabel,formatter=value=>value){
@@ -256,6 +263,7 @@
       const result=await response.json();
       if(!response.ok||result.error)throw new Error(result.error||"Collaboration data could not be loaded.");
       payload=result;
+      assignTeamColors();
       populateFilters();
       render();
       return payload;

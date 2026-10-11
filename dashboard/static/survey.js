@@ -116,11 +116,26 @@
     };
     const W=Math.max(650,periods.length*130),H=300,p={l:58,r:22,t:28,b:46},plotW=W-p.l-p.r,plotH=H-p.t-p.b;
     const x=index=>p.l+(periods.length===1?plotW/2:index*plotW/(periods.length-1));
-    const yRating=value=>p.t+plotH-(Number(value)||0)/100*plotH;
-    let ratingSvg=`<svg viewBox="0 0 ${W} ${H}" style="min-width:${Math.max(560,periods.length*105)}px" role="img" aria-label="Quarterly positive response trend for every rated area">`;
-    [0,25,50,75,100].forEach(value=>{
+    const visibleValues=series.flatMap(definition=>periods.map(period=>definition.value(period))).filter(value=>value!=null&&Number.isFinite(Number(value))).map(Number);
+    let ratingMin=0,ratingMax=100;
+    if(visibleValues.length){
+      const rawMin=Math.min(...visibleValues),rawMax=Math.max(...visibleValues);
+      const desiredSpan=Math.max(20,rawMax-rawMin+10);
+      const midpoint=(rawMin+rawMax)/2;
+      ratingMin=Math.max(0,Math.floor((midpoint-desiredSpan/2)/5)*5);
+      ratingMax=Math.min(100,Math.ceil((midpoint+desiredSpan/2)/5)*5);
+      if(ratingMax-ratingMin<20){
+        if(ratingMin===0)ratingMax=Math.min(100,20);
+        else ratingMin=Math.max(0,ratingMax-20);
+      }
+    }
+    const yRating=value=>p.t+plotH-(Number(value)-ratingMin)/(ratingMax-ratingMin)*plotH;
+    const ratingTicks=Array.from({length:5},(_,index)=>ratingMin+(ratingMax-ratingMin)*index/4);
+    let ratingSvg=`<svg viewBox="0 0 ${W} ${H}" style="min-width:${Math.max(560,periods.length*105)}px" role="img" aria-label="Quarterly positive response trend for every rated area. Scale ${ratingMin} to ${ratingMax} percent.">`;
+    ratingTicks.forEach(value=>{
       const axisY=yRating(value);
-      ratingSvg+=`<line class="gridline" x1="${p.l}" x2="${W-p.r}" y1="${axisY}" y2="${axisY}"/><text class="axis-label" x="${p.l-9}" y="${axisY+4}" text-anchor="end">${value}%</text>`;
+      const label=Number.isInteger(value)?value:value.toFixed(1);
+      ratingSvg+=`<line class="gridline" x1="${p.l}" x2="${W-p.r}" y1="${axisY}" y2="${axisY}"/><text class="axis-label" x="${p.l-9}" y="${axisY+4}" text-anchor="end">${label}%</text>`;
     });
     series.forEach(definition=>{
       const points=periods.map((period,index)=>({x:x(index),y:yRating(definition.value(period)),value:definition.value(period),period})).filter(point=>point.value!=null);
@@ -144,6 +159,10 @@
 
     const responseMax=Math.max(10,Math.ceil(Math.max(...periods.map(period=>Number(period.response_count)||0))*1.2/10)*10);
     const yResponses=value=>p.t+plotH-(Number(value)||0)/responseMax*plotH;
+    // Bars use band centres rather than the line chart's endpoint positions.
+    // This leaves half a category of breathing room beside both Y-axis edges,
+    // preventing the first bar/value from colliding with the tick labels.
+    const responseX=index=>p.l+(index+.5)*plotW/periods.length;
     let participationSvg=`<svg viewBox="0 0 ${W} ${H}" style="min-width:${Math.max(560,periods.length*105)}px" role="img" aria-label="Quarterly anonymous survey responses">`;
     [0,.25,.5,.75,1].forEach(part=>{
       const value=Math.round(responseMax*part),axisY=yResponses(value);
@@ -151,7 +170,7 @@
     });
     periods.forEach((period,index)=>{
       const selected=period.month===view.current.month;
-      const center=x(index),barWidth=Math.min(64,plotW/Math.max(2,periods.length)*.55);
+      const center=responseX(index),barWidth=Math.min(64,plotW/periods.length*.55);
       const barY=yResponses(period.response_count),barHeight=p.t+plotH-barY;
       const accessibleLabel=`${monthLabel(period.month)}. ${period.response_count||0} anonymous survey responses.`;
       participationSvg+=`<rect class="survey-response-bar chart-tooltip-target${selected?" selected":""}" x="${center-barWidth/2}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="6" tabindex="0" role="img" aria-label="${escapeHtml(accessibleLabel)}" data-chart-tooltip data-tooltip-title="${escapeHtml(monthLabel(period.month))}" data-tooltip-line-one="Survey responses: ${period.response_count||0}"><title>${escapeHtml(accessibleLabel)}</title></rect><text class="survey-response-value" x="${center}" y="${Math.max(18,barY-8)}" text-anchor="middle">${period.response_count||0}</text><text class="axis-label${selected?" survey-selected-label":""}" x="${center}" y="${H-17}" text-anchor="middle">${escapeHtml(shortMonth(period.month))}</text>`;
@@ -329,7 +348,20 @@
   }
 
   function render(){
-    if(!payload.periods.length){clear("No recognised survey files were found under the surveys folder.");return;}
+    if(!payload.periods.length){
+      const meta=payload.meta||{};
+      const reasons=meta.invalid_reasons||{};
+      const reasonLabels={
+        unreadable_workbook:"could not be opened (encrypted, incomplete, or damaged)",
+        unrecognised_headers:"did not contain the required headers together in the first ten rows",
+        no_valid_start_times:"contained the headers but no valid Start time values",
+        processing_error:"could not be processed",
+      };
+      const details=Object.entries(reasons).filter(([,count])=>Number(count)>0).map(([reason,count])=>`${count} ${reasonLabels[reason]||"could not be recognised"}`);
+      const discovered=Number(meta.discovered_files||meta.invalid_files||0);
+      clear(discovered?`Found ${discovered} survey workbook${discovered===1?"":"s"}, but none could be loaded${details.length?`: ${details.join("; ")}`:"."}`:"No supported .xlsx or .xlsm survey files were found under the surveys folder.");
+      return;
+    }
     const view=currentView();
     renderKpis(view);
     renderTrend(view);

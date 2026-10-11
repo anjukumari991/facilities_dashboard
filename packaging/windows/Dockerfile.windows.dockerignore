@@ -1,0 +1,16 @@
+**
+!dashboard/
+!dashboard/**
+!tests/
+!tests/**
+!packaging/
+!packaging/windows/
+!packaging/windows/Dockerfile.windows
+
+dashboard/**/__pycache__/
+dashboard/**/*.pyc
+tests/**/__pycache__/
+tests/**/*.pyc
+dashboard/**/*.xlsx
+dashboard/**/*.xlsm
+dashboard/**/*.pptx

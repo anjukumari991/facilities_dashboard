@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
+import re
 from types import SimpleNamespace
 import sys
 import tempfile
 import threading
 import unittest
+from zipfile import ZipFile
 
 from openpyxl import Workbook
+from openpyxl.utils.datetime import to_excel
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +43,110 @@ SURVEY_HEADERS = [
 
 
 class SurveyCommentParserTests(unittest.TestCase):
+    def test_repairs_incorrect_a1_dimension_and_accepts_legacy_questions(self) -> None:
+        temporary_directory = Path(tempfile.mkdtemp(prefix="facilities-survey-dimension-test-"))
+        surveys_directory = temporary_directory / "surveys"
+        surveys_directory.mkdir()
+        path = surveys_directory / "survey.xlsx"
+        rewritten = surveys_directory / "rewritten.xlsx"
+        headers = list(SURVEY_HEADERS)
+        headers[5] = "Quality of lunch in the pantry"
+        headers[6] = "Please rate your overall satisfaction with the recent upgrades to workplace amenities"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(headers)
+        sheet.append(["id", datetime(2026, 10, 6, 12, 25, 38), datetime(2026, 10, 6, 12, 30), "private@example.com", "Private Person", "Satisfied", 4, "Satisfied", "Satisfied", "Satisfied", "Satisfied", "Satisfied", "Satisfied", "Satisfied", 5, ""])
+        workbook.save(path)
+        workbook.close()
+        with ZipFile(path, "r") as source, ZipFile(rewritten, "w") as target:
+            for item in source.infolist():
+                content = source.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    content = re.sub(br'<dimension ref="[^"]+"', b'<dimension ref="A1"', content, count=1)
+                target.writestr(item, content)
+        path.unlink()
+        rewritten.rename(path)
+        try:
+            payload = load_surveys(temporary_directory)
+            self.assertEqual(payload["meta"]["file_count"], 1)
+            self.assertEqual(payload["meta"]["response_count"], 1)
+            self.assertEqual(payload["periods"][0]["month"], "2026-10-01")
+            self.assertEqual(payload["periods"][0]["food_satisfaction_rate"], 100.0)
+            self.assertEqual(payload["periods"][0]["enhancement_average"], 4.0)
+        finally:
+            path.unlink(missing_ok=True)
+            rewritten.unlink(missing_ok=True)
+            surveys_directory.rmdir()
+            temporary_directory.rmdir()
+
+    def test_reports_privacy_safe_reason_when_start_times_are_invalid(self) -> None:
+        temporary_directory = Path(tempfile.mkdtemp(prefix="facilities-survey-diagnostic-test-"))
+        surveys_directory = temporary_directory / "surveys"
+        surveys_directory.mkdir()
+        path = surveys_directory / "survey.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(SURVEY_HEADERS)
+        sheet.append(["id", "not a date", "", "private@example.com", "Private Person", "Satisfied", 4, "Satisfied", "Satisfied", "Satisfied", "Satisfied", "Satisfied", "Satisfied", "Satisfied", 4, ""])
+        workbook.save(path)
+        workbook.close()
+        try:
+            payload = load_surveys(temporary_directory)
+            self.assertEqual(payload["meta"]["discovered_files"], 1)
+            self.assertEqual(payload["meta"]["invalid_files"], 1)
+            self.assertEqual(payload["meta"]["invalid_reasons"], {"no_valid_start_times": 1})
+            self.assertNotIn("Private Person", json.dumps(payload))
+            self.assertNotIn("private@example.com", json.dumps(payload))
+        finally:
+            path.unlink(missing_ok=True)
+            surveys_directory.rmdir()
+            temporary_directory.rmdir()
+
+    def test_accepts_short_year_text_and_numeric_excel_start_times(self) -> None:
+        temporary_directory = Path(tempfile.mkdtemp(prefix="facilities-survey-date-test-"))
+        surveys_directory = temporary_directory / "surveys"
+        surveys_directory.mkdir()
+        path = surveys_directory / "survey.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(SURVEY_HEADERS)
+        base_response = [
+            "id",
+            None,
+            None,
+            "private@example.com",
+            "Private Person",
+            "Satisfied",
+            4,
+            "Satisfied",
+            "Satisfied",
+            "Satisfied",
+            "Satisfied",
+            "Satisfied",
+            "Satisfied",
+            "Satisfied",
+            4,
+            "",
+        ]
+        short_year_response = list(base_response)
+        short_year_response[1] = "10/6/26 12:25:38"
+        numeric_response = list(base_response)
+        numeric_response[0] = "id-2"
+        numeric_response[1] = to_excel(datetime(2026, 10, 7, 9, 30))
+        sheet.append(short_year_response)
+        sheet.append(numeric_response)
+        workbook.save(path)
+        workbook.close()
+        try:
+            payload = load_surveys(temporary_directory)
+            self.assertEqual(payload["meta"]["file_count"], 1)
+            self.assertEqual(payload["meta"]["response_count"], 2)
+            self.assertEqual(payload["periods"][0]["month"], "2026-10-01")
+        finally:
+            path.unlink(missing_ok=True)
+            surveys_directory.rmdir()
+            temporary_directory.rmdir()
+
     def test_reads_only_recognised_comments_and_masks_direct_identifiers(self) -> None:
         temporary_directory = Path(tempfile.mkdtemp(prefix="facilities-survey-comment-test-"))
         surveys_directory = temporary_directory / "surveys"
@@ -110,6 +218,12 @@ class SurveyCommentParserTests(unittest.TestCase):
 
 
 class SurveyCommentSummaryTests(unittest.TestCase):
+    def test_gateway_timeout_is_reported_as_request_timeout(self) -> None:
+        gateway_timeout = type("InternalServerError", (Exception,), {"status_code": 504})
+        result = DashboardChatService._safe_error(gateway_timeout("Gateway Timeout"))
+        self.assertEqual(result["code"], "request_timeout")
+        self.assertIn("did not finish", result["error"])
+
     def test_timeout_is_not_reported_as_connection_failure(self) -> None:
         timeout_error = type("APITimeoutError", (Exception,), {})
         result = DashboardChatService._safe_error(timeout_error("timed out"))

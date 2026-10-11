@@ -621,10 +621,10 @@ class DashboardChatService:
             from openai import OpenAI
         except ImportError as exc:
             raise RuntimeError("AI support is unavailable because the OpenAI component is not installed.") from exc
-        # Local CLI-backed models commonly need longer than a hosted API for
-        # larger summaries. Keep the client above the bridge's 90-second
-        # generation timeout and avoid automatic retries that duplicate work.
-        return OpenAI(api_key=token, base_url=endpoint, timeout=120.0, max_retries=0)
+        # Local CLI-backed models can take several minutes for larger
+        # summaries. Do not impose a client-side deadline, and avoid retries
+        # that could duplicate a still-running generation request.
+        return OpenAI(api_key=token, base_url=endpoint, timeout=None, max_retries=0)
 
     @staticmethod
     def _model_ids(client: Any) -> list[str]:
@@ -719,7 +719,7 @@ class DashboardChatService:
         elif error_name == "RateLimitError" or status == 429:
             code = "quota_or_rate_limit"
             message = "The AI endpoint's quota or rate limit was reached. Check its usage configuration and try again."
-        elif error_name in {"APITimeoutError", "TimeoutError"}:
+        elif error_name in {"APITimeoutError", "TimeoutError"} or status == 504:
             code = "request_timeout"
             message = "The AI endpoint did not finish the request in time. It is reachable; try Summarize again or use a faster model."
         elif error_name == "APIConnectionError":
@@ -728,6 +728,9 @@ class DashboardChatService:
         elif error_name in {"BadRequestError", "UnprocessableEntityError"} or status in {400, 422}:
             code = "request_rejected"
             message = "The configured AI endpoint rejected the request. Check that it supports OpenAI-compatible chat and tool calls."
+        elif status in {500, 502, 503}:
+            code = "endpoint_server_error"
+            message = "The configured AI endpoint was reached, but its model provider failed. Check the local server log and try again."
         elif isinstance(exc, RuntimeError):
             code = "component_unavailable"
             message = str(exc)

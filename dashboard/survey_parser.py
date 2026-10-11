@@ -8,9 +8,18 @@ import re
 from typing import Any, Iterable
 
 from openpyxl import load_workbook
+from openpyxl.utils.datetime import from_excel
 
 
 SUPPORTED_SUFFIXES = {".xlsx", ".xlsm"}
+
+
+class SurveyFileError(ValueError):
+    """A privacy-safe reason why a survey workbook could not be parsed."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 COMMENT_HEADER_TERMS = (
     "comment",
@@ -46,8 +55,8 @@ PERSON_NAME_CONTEXT_PATTERN = re.compile(
 HONORIFIC_NAME_PATTERN = re.compile(r"\b(?:Mr|Mrs|Ms|Miss|Dr)\.?\s+[A-Z][A-Za-z'-]{1,40}\b")
 
 QUESTION_PATTERNS: dict[str, tuple[str, ...]] = {
-    "food": ("food and fresh beverage",),
-    "enhancements": ("recent workplace enhancements",),
+    "food": ("food and fresh beverage", "quality of lunch in the pantry"),
+    "enhancements": ("recent workplace enhancements", "recent upgrades to workplace amenities"),
     "work_areas": ("work areas",),
     "meeting_rooms": ("meeting rooms",),
     "pantry": ("pantry",),
@@ -91,10 +100,48 @@ def _datetime(value: Any) -> datetime | None:
         return value
     if isinstance(value, date):
         return datetime.combine(value, datetime.min.time())
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            converted = from_excel(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if isinstance(converted, datetime):
+            return converted
+        if isinstance(converted, date):
+            return datetime.combine(converted, datetime.min.time())
+        return None
     raw = str(value or "").strip()
     if not raw:
         return None
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        pass
+    # Microsoft Forms exports use month/day slash dates such as
+    # 10/6/26 for 6 October 2026. Day/month is also accepted when the value is
+    # unambiguous, while native Excel date cells avoid this ambiguity entirely.
+    for fmt in (
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%m/%d/%Y %I:%M %p",
+        "%m/%d/%Y",
+        "%m/%d/%y %H:%M:%S",
+        "%m/%d/%y %H:%M",
+        "%m/%d/%y %I:%M:%S %p",
+        "%m/%d/%y %I:%M %p",
+        "%m/%d/%y",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y %I:%M:%S %p",
+        "%d/%m/%Y %I:%M %p",
+        "%d/%m/%Y",
+        "%d/%m/%y %H:%M:%S",
+        "%d/%m/%y %H:%M",
+        "%d/%m/%y %I:%M:%S %p",
+        "%d/%m/%y %I:%M %p",
+        "%d/%m/%y",
+    ):
         try:
             return datetime.strptime(raw, fmt)
         except ValueError:
@@ -137,7 +184,9 @@ def _header_map(values: Iterable[Any]) -> dict[str, int]:
     mapping: dict[str, int] = {}
     for field, patterns in QUESTION_PATTERNS.items():
         for index, header in headers:
-            if field == "meeting_rooms":
+            if field in {"food", "enhancements"}:
+                matched = any(pattern in header for pattern in patterns)
+            elif field == "meeting_rooms":
                 matched = header == "meeting rooms"
             elif field in {"work_areas", "pantry", "washroom"}:
                 matched = header == patterns[0]
@@ -188,7 +237,10 @@ def _safe_comment(value: Any, limit: int = 2000) -> str:
 
 
 def _survey_sheets(workbook) -> Iterable[tuple[Any, int, dict[str, int], list[tuple[int, str]]]]:
-    required = {"start_time", "overall", "enhancements", "food"}
+    # Food and workplace-enhancement questions were added or reworded across
+    # survey versions. Start time and overall experience are the stable core;
+    # every other available rating is included dynamically.
+    required = {"start_time", "overall"}
     for sheet in workbook.worksheets:
         for row_number in range(1, min(sheet.max_row, 10) + 1):
             values = [sheet.cell(row_number, column).value for column in range(1, sheet.max_column + 1)]
@@ -214,10 +266,25 @@ def _response_fingerprint(record: dict[str, Any]) -> str:
 
 
 def _parse_file(path: Path) -> list[dict[str, Any]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    records: list[dict[str, Any]] = []
     try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:
+        raise SurveyFileError(
+            "unreadable_workbook",
+            "The workbook could not be opened. It may be encrypted, incomplete, or damaged.",
+        ) from exc
+    records: list[dict[str, Any]] = []
+    recognised_sheets = 0
+    try:
+        # Some Microsoft Forms exports contain complete worksheet XML but an
+        # incorrect declared dimension of A1. Excel repairs this while opening
+        # the file; openpyxl read-only mode needs the dimension reset explicitly.
+        for sheet in workbook.worksheets:
+            if sheet.max_row == 1 and sheet.max_column == 1 and hasattr(sheet, "reset_dimensions"):
+                sheet.reset_dimensions()
+                sheet.calculate_dimension(force=True)
         for sheet, header_row, columns, comment_columns in _survey_sheets(workbook):
+            recognised_sheets += 1
             selected_fields = [field for field in ALLOWED_RESPONSE_FIELDS if field in columns]
             analytical_iterators = [
                 sheet.iter_rows(
@@ -268,10 +335,23 @@ def _parse_file(path: Path) -> list[dict[str, Any]]:
                         "comments": comments,
                     }
                 )
+    except Exception as exc:
+        raise SurveyFileError(
+            "processing_error",
+            "The workbook opened, but its survey rows could not be processed.",
+        ) from exc
     finally:
         workbook.close()
+    if not recognised_sheets:
+        raise SurveyFileError(
+            "unrecognised_headers",
+            "The required survey headers were not found together within the first ten rows of a worksheet.",
+        )
     if not records:
-        raise ValueError("No recognised facilities survey responses were found.")
+        raise SurveyFileError(
+            "no_valid_start_times",
+            "Survey headers were found, but no valid Start time values were available.",
+        )
     survey_start = min(datetime.fromisoformat(record["started_at"]) for record in records)
     survey_month = survey_start.date().replace(day=1).isoformat()
     for record in records:
@@ -319,18 +399,32 @@ def load_surveys(base_dir: Path | None) -> dict[str, Any]:
     if not files:
         return {
             "periods": [],
-            "meta": {"months": [], "file_count": 0, "response_count": 0, "duplicate_count": 0, "invalid_files": 0},
+            "meta": {
+                "months": [],
+                "file_count": 0,
+                "discovered_files": 0,
+                "response_count": 0,
+                "duplicate_count": 0,
+                "invalid_files": 0,
+                "invalid_reasons": {},
+            },
         }
 
     by_fingerprint: dict[str, dict[str, Any]] = {}
     invalid_files = 0
+    invalid_reasons: Counter[str] = Counter()
     parsed_count = 0
     raw_response_count = 0
     for path in files:
         try:
             records = _parse_file(path)
+        except SurveyFileError as exc:
+            invalid_files += 1
+            invalid_reasons[exc.code] += 1
+            continue
         except Exception:
             invalid_files += 1
+            invalid_reasons["processing_error"] += 1
             continue
         parsed_count += 1
         raw_response_count += len(records)
@@ -400,9 +494,11 @@ def load_surveys(base_dir: Path | None) -> dict[str, Any]:
         "meta": {
             "months": [period["month"] for period in periods],
             "file_count": parsed_count,
+            "discovered_files": len(files),
             "response_count": len(records),
             "duplicate_count": max(0, raw_response_count - len(records)),
             "invalid_files": invalid_files,
+            "invalid_reasons": dict(invalid_reasons),
             "storage_mode": "local_with_masked_comments",
         },
     }

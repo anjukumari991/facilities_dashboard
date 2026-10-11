@@ -1,0 +1,75 @@
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG PYTHON_VERSION=3.12.9
+
+ENV WINEARCH=win64 \
+    WINEPREFIX=/opt/wine-prefix \
+    WINEDEBUG=-all
+
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        cabextract \
+        wget \
+        wine \
+        wine32 \
+        wine64 \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN xvfb-run -a sh -c '\
+        wineboot --init || test -d "${WINEPREFIX}/drive_c"; \
+        winecfg -v win10; \
+        wineserver -w'
+
+RUN wget -q "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-amd64.exe" -O /tmp/python-installer.exe \
+    && installer_status=0 \
+    && xvfb-run -a wine /tmp/python-installer.exe /quiet \
+        InstallAllUsers=0 \
+        Include_launcher=0 \
+        Include_test=0 \
+        PrependPath=0 \
+        TargetDir=C:\\Python312 \
+        /log C:\\python-install.log \
+        || installer_status=$?; \
+    if [ "${installer_status}" -ne 0 ]; then \
+        cat "${WINEPREFIX}/drive_c/python-install.log" 2>/dev/null || true; \
+        exit "${installer_status}"; \
+    fi; \
+    rm /tmp/python-installer.exe; \
+    test -f "${WINEPREFIX}/drive_c/Python312/python.exe"; \
+    xvfb-run -a wine 'C:\Python312\python.exe' --version
+
+COPY dashboard/requirements.txt /tmp/facilities-requirements.txt
+
+RUN xvfb-run -a wine 'C:\Python312\python.exe' -m pip install --upgrade pip \
+    && xvfb-run -a wine 'C:\Python312\python.exe' -m pip install \
+        -r 'Z:\tmp\facilities-requirements.txt' \
+        pyinstaller \
+        pillow
+
+WORKDIR /workspace
+COPY dashboard/ ./dashboard/
+COPY tests/ ./tests/
+
+RUN xvfb-run -a wine 'C:\Python312\python.exe' -m unittest discover -s tests -v
+
+RUN xvfb-run -a wine 'C:\Python312\python.exe' -c "from PIL import Image, ImageOps; image = Image.open('dashboard/static/app-icon.png').convert('RGBA'); square = ImageOps.pad(image, (512, 512), color=(4, 43, 66, 255)); square.save('dashboard/static/app-icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+
+RUN xvfb-run -a wine 'C:\Python312\python.exe' -m PyInstaller \
+        --noconfirm \
+        --clean \
+        --onefile \
+        --windowed \
+        --name facilities_dashboard \
+        --paths dashboard \
+        --add-data 'dashboard/static;static' \
+        --icon dashboard/static/app-icon.ico \
+        --collect-data webview \
+        --collect-all keyring \
+        --collect-all openai \
+        --hidden-import webview.platforms.qt \
+        dashboard/desktop_app.py \
+    && sha256sum dist/facilities_dashboard.exe > dist/facilities_dashboard.exe.sha256

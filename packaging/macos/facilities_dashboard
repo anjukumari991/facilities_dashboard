@@ -1,0 +1,15 @@
+#!/bin/zsh
+
+set -eu
+
+CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHON_HOME="$CONTENTS_DIR/Frameworks/Python.framework/Versions/3.11"
+APP_RESOURCES="$CONTENTS_DIR/Resources"
+
+export DYLD_FRAMEWORK_PATH="$CONTENTS_DIR/Frameworks"
+export PYTHONHOME="$PYTHON_HOME"
+export PYTHONNOUSERSITE=1
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="$APP_RESOURCES/site-packages:$APP_RESOURCES/app/dashboard"
+
+exec "$PYTHON_HOME/bin/python3.11" "$APP_RESOURCES/app/dashboard/desktop_app.py" "$@"
