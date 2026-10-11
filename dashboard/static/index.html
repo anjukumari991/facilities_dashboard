@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Facilities Dashboard</title>
+  <link rel="icon" type="image/png" href="app-icon.png">
+  <link rel="stylesheet" href="styles.css?v=31">
+</head>
+<body>
+  <header class="topbar">
+    <div class="header-brand">
+      <img class="brand-logo" src="sequoia-logo.svg" alt="Sequoia">
+      <div class="eyebrow">INDIA ADMIN AND FACILITIES</div>
+    </div>
+    <div class="actions">
+      <button class="button secondary" id="chatButton" type="button">Ask Dashboard</button>
+      <button class="button secondary" id="settingsButton" type="button">Settings</button>
+      <button class="button" id="refreshButton" type="button">Refresh</button>
+    </div>
+  </header>
+
+  <nav class="report-tabs" id="reportTabs" role="tablist" aria-label="Dashboard reports" hidden>
+    <div class="report-tabs-inner">
+      <button class="report-tab" id="expenseReportTab" type="button" role="tab" aria-controls="expenseReportPanel" aria-selected="true" data-tab-target="expenseReportPanel">Expense Report</button>
+      <button class="report-tab" id="surveyReportTab" type="button" role="tab" aria-controls="surveyReportPanel" aria-selected="false" data-tab-target="surveyReportPanel">Survey Report</button>
+      <button class="report-tab" id="workplaceTab" type="button" role="tab" aria-controls="workplacePanel" aria-selected="false" data-tab-target="workplacePanel">Workplace</button>
+      <button class="report-tab" id="collaborationsTab" type="button" role="tab" aria-controls="collaborationsPanel" aria-selected="false" data-tab-target="collaborationsPanel">Collaborations</button>
+    </div>
+  </nav>
+
+  <main>
+    <section class="setup-panel panel" id="setupPanel" hidden>
+      <div>
+        <span>Local data setup</span>
+        <h2 id="setupTitle">Choose where your expense files are kept</h2>
+        <p id="setupMessage">The app will create and remember the required <code>expenses</code>, <code>surveys</code>, <code>workplace</code>, <code>contracts</code>, and <code>audit_reports</code> folders inside the directory you choose.</p>
+      </div>
+      <button class="button setup-button" id="chooseFolderButton" type="button">Choose base directory</button>
+    </section>
+
+    <div id="dashboardContent" hidden>
+    <section id="expenseReportPanel" role="tabpanel" aria-labelledby="expenseReportTab" data-tab-panel>
+    <section class="filterbar panel">
+      <select id="workbookFilter" hidden aria-hidden="true" tabindex="-1"></select>
+      <label>Category Name<select id="groupFilter"></select></label>
+      <label>Through month<select id="monthFilter"></select></label>
+      <label>Period<select id="lookbackFilter"><option value="3" selected>3 months</option><option value="6">6 months</option><option value="12">12 months</option><option value="999">All available</option></select></label>
+      <label class="currency-label">Currency<select id="currencyFilter"><option value="INR">INR (₹)</option><option value="USD">USD ($)</option></select></label>
+      <label class="rate-label">1 USD in INR<input id="exchangeRateInput" type="number" min="0.01" step="0.01" inputmode="decimal" value="96" aria-label="INR value of one US dollar"></label>
+      <div class="status" id="status" role="status" aria-live="polite">Ready</div>
+    </section>
+
+    <section class="kpis" id="kpis"></section>
+
+    <div class="section-heading">
+      <div><span>Category performance</span><h2>Latest month with three-month context</h2></div>
+      <p>All four categories remain visible here for comparison, independent of the report filter.</p>
+    </div>
+    <section class="bucket-grid" id="bucketCards"></section>
+
+    <section class="panel chart-panel monthly-trend-panel">
+      <div class="panel-title"><div><span>Monthly comparison</span><h2>Spend by month and year</h2><p>The timeline extends automatically as new Excel months are added; the dashed line shows the monthly average.</p></div><div class="legend" id="monthlyTrendLegend"></div></div>
+      <div id="monthlyTrendChart" class="chart"></div>
+    </section>
+
+    <section class="grid two-one">
+      <article class="panel chart-panel">
+        <div class="panel-title"><div><span>Monthly trajectory</span><h2>Where the money is going</h2><p id="trendCurrencyDescription">Stacked monthly spend in INR; totals appear above each month.</p></div><div class="legend" id="trendLegend"></div></div>
+        <div id="trendChart" class="chart"></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-title"><div><span>Change drivers</span><h2>What changed vs prior month</h2><p>Green means spend decreased; red means spend increased.</p></div></div>
+        <div id="varianceChart" class="chart"></div>
+      </article>
+    </section>
+
+    <section class="grid three-even">
+      <article class="panel chart-panel">
+        <div class="panel-title"><div><span>Cost concentration</span><h2>Top vendors in latest month</h2><p>Each vendor bar is split by expense type; select a segment for details.</p></div></div>
+        <div id="vendorChart" class="chart"></div>
+      </article>
+      <article class="panel chart-panel misc-panel">
+        <div class="panel-title"><div><span>Expense detail</span><h2>Spend by expense type</h2><p>Selected-period share by expense type for the selected Category Name.</p></div><div class="legend" id="miscLegend"></div></div>
+        <div id="miscChart" class="chart"></div>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-title"><div><span>Lunch unit economics</span><h2>Cost per person by vendor</h2><p>Latest month; the green dashed line is the granted budget.</p></div><div class="unit-pill" id="lunchBudgetPill">Budget ₹200</div></div>
+        <div id="lunchChart" class="chart"></div>
+      </article>
+    </section>
+
+    <section class="expense-audit-grid">
+      <article class="panel table-panel expense-detail-panel">
+        <div class="panel-title"><div><span>Audit trail</span><h2>Latest-month expense detail</h2></div><div id="rowCount"></div></div>
+        <div class="table-scroll"><table><thead><tr><th>Category Name</th><th>Vendor</th><th>Expense type</th><th class="numeric">Amount</th><th class="numeric">Actual count</th><th class="numeric">Cost / person</th></tr></thead><tbody id="detailRows"></tbody></table></div>
+      </article>
+      <aside class="panel audit-reports-panel">
+        <div class="panel-title"><div><span>Supporting files</span><h2>Audit reports</h2><p>Reports for the selected month. Double-click a file to open it outside the app.</p></div><div id="auditReportCount"></div></div>
+        <div class="audit-report-list" id="auditReportList"></div>
+      </aside>
+    </section>
+    </section>
+    <section id="surveyReportPanel" role="tabpanel" aria-labelledby="surveyReportTab" data-tab-panel hidden>
+      <section class="filterbar panel survey-filterbar">
+        <label>Survey month<select id="surveyMonthFilter"><option value="all">All surveys</option></select></label>
+        <div class="status" id="surveyStatus" role="status" aria-live="polite">Survey data has not been loaded.</div>
+      </section>
+      <section class="kpis" id="surveyKpis"></section>
+      <section class="grid one-one survey-quarterly-grid">
+        <article class="panel chart-panel">
+          <div class="panel-title"><div><span>Quarterly performance</span><h2>Rating trend by area</h2><p>Positive response rate by quarter: 4–5 stars for star-rated questions and Satisfied for facilities areas.</p></div></div>
+          <div class="legend survey-series-legend" id="surveyRatingTrendLegend" aria-label="Rating trend series"></div>
+          <div id="surveyRatingTrendChart" class="chart"></div>
+        </article>
+        <article class="panel chart-panel">
+          <div class="panel-title"><div><span>Survey participation</span><h2>Responses by quarter</h2><p>Number of anonymous responses received in each quarterly survey.</p></div></div>
+          <div id="surveyParticipationChart" class="chart"></div>
+        </article>
+      </section>
+      <section class="grid two-one survey-comparison-grid">
+        <article class="panel chart-panel">
+          <div class="panel-title"><div><span>Workplace experience</span><h2>What is working—and what needs attention?</h2><p id="surveyTouchpointDescription">Ranked satisfaction by workplace touchpoint.</p></div></div>
+          <div id="surveyTouchpointChart" class="chart"></div>
+        </article>
+        <article class="panel chart-panel">
+          <div class="panel-title"><div><span>Response pattern</span><h2>How ratings are distributed</h2><p>“Lunch, snacks &amp; hygiene changes” comes from the question covering the new lunch vendor, healthier snacks, and meeting-room and washroom hygiene.</p></div></div>
+          <div id="surveyRatingChart" class="chart"></div>
+        </article>
+      </section>
+      <section class="panel survey-comments-panel" aria-labelledby="surveyCommentsTitle">
+        <div class="panel-title survey-comments-heading">
+          <div>
+            <span>Employee voice</span>
+            <h2 id="surveyCommentsTitle">Comments and AI summary</h2>
+            <p>Original comments for the selected survey period remain visible alongside structured themes.</p>
+          </div>
+          <div class="survey-comments-actions">
+            <div id="surveyCommentCount" class="unit-pill">0 comments</div>
+            <button class="button settings-primary" id="surveySummarizeButton" type="button">Summarize</button>
+          </div>
+        </div>
+        <div class="survey-comments-grid">
+          <section class="survey-comments-column" aria-labelledby="surveyOriginalCommentsTitle">
+            <div class="survey-comments-column-heading">
+              <div><h3 id="surveyOriginalCommentsTitle">Original comments</h3><p>Identity columns are never loaded. Contact details and explicit employee identifiers in comments are masked locally.</p></div>
+            </div>
+            <div class="survey-comment-list" id="surveyCommentList"></div>
+          </section>
+          <section class="survey-summary-column" aria-labelledby="surveyAiSummaryTitle">
+            <div class="survey-comments-column-heading">
+              <div><h3 id="surveyAiSummaryTitle">AI summary</h3><p id="surveySummaryContext">Select Summarize to identify appreciations, asks and focus areas.</p></div>
+            </div>
+            <div class="survey-summary-content" id="surveySummaryContent">
+              <div class="survey-summary-empty"><strong>No summary generated</strong><span>The AI request is made only when you select Summarize.</span></div>
+            </div>
+            <p class="survey-summary-status" id="surveySummaryStatus" role="status" aria-live="polite"></p>
+          </section>
+        </div>
+      </section>
+    </section>
+    <section id="workplacePanel" role="tabpanel" aria-labelledby="workplaceTab" data-tab-panel hidden>
+      <section class="filterbar panel workplace-filterbar">
+        <label>Financial year<select id="workplaceFyFilter"><option value="all">All FYs</option></select></label>
+        <label class="currency-label">Currency<select id="workplaceCurrencyFilter"><option value="INR">INR (₹)</option><option value="USD">USD ($)</option></select></label>
+        <label class="rate-label">1 USD in INR<input id="workplaceExchangeRateInput" type="number" min="0.01" step="0.01" inputmode="decimal" value="96" aria-label="INR value of one US dollar for workplace costs"></label>
+        <div class="status" id="workplaceStatus" role="status" aria-live="polite">Workplace data has not been loaded.</div>
+      </section>
+
+      <section class="panel workplace-forecast-card" id="workplaceForecastCard">
+        <div>
+          <span>Contract outlook</span>
+          <h2>Expected Workplace cost next year</h2>
+          <p id="workplaceForecastCoverage">Calculated from all available monthly history.</p>
+        </div>
+        <div class="workplace-forecast-values">
+          <div class="forecast-primary"><small id="workplaceForecastFy">Next FY</small><strong id="workplaceExpectedAnnual">—</strong><span>Expected annual cost · 5% contractual increase</span></div>
+          <div><small>Expected monthly</small><strong id="workplaceExpectedMonthly">—</strong></div>
+          <div><small>Historical monthly average</small><strong id="workplaceHistoricalMonthly">—</strong></div>
+          <div><small>Historical annualized average</small><strong id="workplaceHistoricalAnnual">—</strong></div>
+        </div>
+      </section>
+
+      <section class="kpis workplace-kpis" id="workplaceKpis"></section>
+
+      <section class="panel chart-panel workplace-trend-panel">
+        <div class="panel-title"><div><span>Monthly cost</span><h2>Workplace cost trend</h2><p>Monthly rental forms the recurring base; additional costs are shown separately. Point to a segment for the exact invoice description.</p></div><div class="legend" id="workplaceTrendLegend"></div></div>
+        <div id="workplaceTrendChart" class="chart"></div>
+      </section>
+
+      <section class="panel chart-panel workplace-additional-panel">
+        <div class="panel-title"><div><span>Cost exceptions</span><h2>Additional workplace cost events</h2><p>Non-rental invoices, ordered by date, with their exact descriptions available in the tooltip.</p></div></div>
+        <div id="workplaceAdditionalChart" class="chart"></div>
+      </section>
+
+      <section class="panel table-panel workplace-table-panel">
+        <div class="panel-title"><div><span>Audit trail</span><h2>Workplace invoice detail</h2><p>All recognised invoices for the selected financial year.</p></div><div id="workplaceRowCount"></div></div>
+        <div class="table-scroll"><table><thead><tr><th>Invoice Number</th><th>Date</th><th>Period</th><th>Description</th><th>Cost type</th><th class="numeric">Amount</th></tr></thead><tbody id="workplaceDetailRows"></tbody></table></div>
+      </section>
+
+      <section class="panel contracts-panel">
+        <div class="panel-title"><div><span>Reference files</span><h2>Contracts</h2><p>Double-click a contract to open it in your computer's default application. Contract contents are never read by the dashboard or AI.</p></div><div id="contractCount"></div></div>
+        <div class="contract-grid" id="contractGrid"></div>
+      </section>
+    </section>
+    <section id="collaborationsPanel" role="tabpanel" aria-labelledby="collaborationsTab" data-tab-panel hidden>
+      <section class="filterbar panel collaboration-filterbar">
+        <label>Plan year<select id="collaborationPyFilter"><option value="all">All PYs</option></select></label>
+        <label>Month<select id="collaborationMonthFilter"><option value="all">All months</option></select></label>
+        <label>Department<select id="collaborationDepartmentFilter"><option value="all">All departments</option></select></label>
+        <label>Status<select id="collaborationStatusFilter"><option value="all">All statuses</option></select></label>
+        <div class="status" id="collaborationStatus" role="status" aria-live="polite">Collaboration data has not been loaded.</div>
+      </section>
+
+      <section class="kpis collaboration-kpis" id="collaborationKpis"></section>
+
+      <section class="panel chart-panel collaboration-teams-panel">
+        <div class="panel-title"><div><span>Team distribution</span><h2>Activities by team</h2><p>Share of selected activities by team. Point to a slice or team name to view every activity performed.</p></div></div>
+        <div id="collaborationTeamChart" class="chart collaboration-team-chart"></div>
+      </section>
+
+      <section class="panel table-panel collaboration-table-panel">
+        <div class="panel-title"><div><span>Delivery register</span><h2>Collaboration detail</h2><p>Point to or focus on shortened text to read the complete activity, timeline, or outcome.</p></div><div id="collaborationRowCount"></div></div>
+        <div class="table-scroll"><table><thead><tr><th>Month</th><th>Department</th><th>Activity / Collaboration</th><th>Status</th><th>Timeline</th><th>Outcome</th></tr></thead><tbody id="collaborationDetailRows"></tbody></table></div>
+      </section>
+    </section>
+    </div>
+
+  </main>
+  <dialog class="app-dialog settings-dialog" id="settingsDialog" aria-labelledby="settingsDialogTitle">
+    <div class="dialog-header">
+      <div>
+        <span>Application preferences</span>
+        <h2 id="settingsDialogTitle">Settings</h2>
+      </div>
+      <button class="button dialog-close" type="button" data-dialog-close>Close</button>
+    </div>
+    <div class="settings-dialog-body">
+      <section class="settings-section">
+        <div>
+          <h3>Local data</h3>
+          <p>Base location</p>
+          <div class="settings-path" id="settingsBasePath">Not selected</div>
+        </div>
+        <div class="settings-actions">
+          <button class="button settings-primary" id="changeFolderButton" type="button">Change base location</button>
+          <button class="button settings-secondary" id="openFolderButton" type="button">Open Base Folder</button>
+        </div>
+      </section>
+      <section class="settings-section">
+        <div class="settings-update-heading">
+          <div>
+            <h3>Application updates</h3>
+            <p id="updateVersion">Version unavailable</p>
+          </div>
+          <span class="version-badge" id="versionBadge">—</span>
+        </div>
+        <p class="token-status" id="updateStatus" role="status" aria-live="polite">Update status has not been checked.</p>
+        <div class="settings-actions">
+          <button class="button settings-primary" id="checkUpdatesButton" type="button">Check for updates</button>
+        </div>
+        <p class="settings-fine-print">Windows updates are downloaded from the official GitHub Release, verified using its SHA-256 checksum, installed after this app closes, and then reopened automatically.</p>
+      </section>
+      <section class="settings-section">
+        <div>
+          <h3>AI connection</h3>
+          <p>The endpoint is stored with other application preferences. The token remains separately protected in your operating system credential vault.</p>
+        </div>
+        <label class="token-field" for="apiEndpointInput">
+          OpenAI-compatible API endpoint
+          <input id="apiEndpointInput" type="url" autocomplete="off" spellcheck="false" value="http://127.0.0.1:12345/v1" placeholder="http://127.0.0.1:12345/v1">
+        </label>
+        <p class="token-status" id="endpointStatus" role="status" aria-live="polite"></p>
+        <div class="settings-actions">
+          <button class="button settings-primary" id="saveEndpointButton" type="button">Save endpoint</button>
+          <button class="button settings-secondary" id="testEndpointButton" type="button">Test endpoint</button>
+        </div>
+        <label class="token-field" for="openaiTokenInput">
+          AI API token
+          <input id="openaiTokenInput" type="password" autocomplete="new-password" spellcheck="false" placeholder="Enter a token to save">
+        </label>
+        <p class="token-status" id="tokenStatus" role="status" aria-live="polite">Checking credential status…</p>
+        <div class="settings-actions">
+          <button class="button settings-primary" id="saveTokenButton" type="button">Save token</button>
+          <button class="button settings-danger" id="deleteTokenButton" type="button">Remove saved token</button>
+        </div>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog class="app-dialog chat-dialog" id="chatDialog" aria-labelledby="chatDialogTitle">
+    <div class="dialog-header chat-dialog-header">
+      <div>
+        <span id="chatContextLabel">Expense Report</span>
+        <h2 id="chatDialogTitle">Ask Dashboard</h2>
+      </div>
+      <div class="chat-header-actions">
+        <button class="button settings-secondary" id="newChatButton" type="button">New chat</button>
+        <button class="button dialog-close" type="button" data-dialog-close>Close</button>
+      </div>
+    </div>
+    <div class="chat-body">
+      <section class="chat-unavailable" id="chatUnavailable" hidden>
+        <h3 id="chatUnavailableMessage">AI support is not available. Add an AI API token in Settings.</h3>
+        <button class="button settings-primary" id="chatOpenSettingsButton" type="button">Open Settings</button>
+      </section>
+      <div id="chatAvailable">
+        <p class="chat-privacy">Ask Dashboard provides only anonymised aggregates to AI. The separate Survey Summarize action sends masked comment text only after confirmation; identity columns and raw response rows are never included. Avoid entering personal information in chat.</p>
+        <div class="chat-messages" id="chatMessages" aria-live="polite"></div>
+        <div class="chat-suggestions" id="chatSuggestions"></div>
+        <form class="chat-form" id="chatForm">
+          <label class="sr-only" for="chatInput">Ask a question about the active dashboard tab</label>
+          <textarea id="chatInput" rows="3" maxlength="2000" placeholder="Ask about the current dashboard…"></textarea>
+          <button class="button settings-primary" id="chatSendButton" type="submit">Send</button>
+        </form>
+        <p class="chat-status" id="chatStatus" role="status" aria-live="polite"></p>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="app-dialog chart-dialog" id="chartDialog" aria-labelledby="chartDialogTitle">
+    <div class="dialog-header">
+      <h2 id="chartDialogTitle">Expanded chart</h2>
+      <button class="button dialog-close" type="button" data-dialog-close>Close</button>
+    </div>
+    <div class="expanded-chart-host" id="expandedChartHost"></div>
+  </dialog>
+  <footer class="site-footer">Made with <span aria-label="love">❤️</span> by Facilities Team (Anju and Suman) <span aria-label="sparkles">✨</span></footer>
+  <script src="components.js?v=1"></script>
+  <script src="audit_reports.js?v=1"></script>
+  <script src="survey.js?v=10"></script>
+  <script src="workplace.js?v=4"></script>
+  <script src="collaborations.js?v=2"></script>
+  <script src="chat.js?v=6"></script>
+  <script src="dashboard.js?v=29"></script>
+</body>
+</html>

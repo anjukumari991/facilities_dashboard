@@ -1,0 +1,34 @@
+# Python and desktop build artifacts
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Local operating-system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local expense data and generated artifacts
+feedback/
+outputs/
+tmp/
+dashboard/data/
+*.xlsx
+*.xlsm
+*.pptx
+~$*
+
+# Internal feedback and source material must never be committed
+feedback/
+
+# Obsolete cloud deployment material; this project is desktop-only
+Dockerfile
+.dockerignore
+.gcloudignore
+GOOGLE_SHEETS_CLOUD_RUN_DEPLOYMENT.md
+deploy_cloud_run.sh
+
