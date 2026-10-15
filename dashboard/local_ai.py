@@ -361,7 +361,12 @@ class LocalAIManager:
                 return self.state()
             if self.download_thread and self.download_thread.is_alive():
                 return self.state()
-            free_bytes = shutil.disk_usage(self.models_dir.parent if self.models_dir.parent.exists() else user_data_directory()).free
+            # On a fresh installation the per-user application data directory
+            # does not exist yet. Windows raises WinError 3 if disk_usage is
+            # called for that missing path, so create the model root before
+            # checking whether there is enough room for the download.
+            self.models_dir.mkdir(parents=True, exist_ok=True)
+            free_bytes = shutil.disk_usage(self.models_dir).free
             present_bytes = []
             for item in model.files:
                 target = self._model_dir(model) / item.filename
@@ -485,6 +490,15 @@ class LocalAIManager:
         completed: int,
         offset: int,
     ) -> None:
+        def tls_arguments() -> list[str]:
+            # Windows curl uses Schannel. Corporate networks often block the
+            # certificate authority's revocation endpoint, which otherwise
+            # causes CURLE_SSL_CONNECT_ERROR (35) even though the certificate
+            # chain is valid. Best-effort mode ignores only unavailable/offline
+            # revocation endpoints; normal TLS validation remains enabled. The
+            # completed model must also match its pinned SHA-256 before use.
+            return ["--ssl-revoke-best-effort"] if sys.platform == "win32" else []
+
         def attempt(resume: bool) -> tuple[int, str]:
             command = [
                 curl,
@@ -502,6 +516,7 @@ class LocalAIManager:
                 "--output",
                 str(part),
             ]
+            command.extend(tls_arguments())
             if resume:
                 command.extend(["--continue-at", "-"])
             command.append(item.url)

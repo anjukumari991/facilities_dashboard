@@ -73,6 +73,46 @@ class LocalAIManagerTests(unittest.TestCase):
             self.assertTrue(LocalAIManager.runtime_available())
             self.assertEqual(LocalAIManager.runtime_name(), "Native llama.cpp server")
 
+    def test_first_download_creates_missing_model_directory_before_disk_check(self) -> None:
+        missing_models = Path(self.temporary.name) / "fresh-install" / "models"
+        manager = LocalAIManager(self.settings, _Credentials(), missing_models, port=12482)
+        self.addCleanup(manager.shutdown)
+
+        with patch.object(LocalAIManager, "runtime_available", return_value=True), patch.object(
+            manager, "_download_worker"
+        ) as worker:
+            manager.download_selected()
+            manager.download_thread.join(timeout=1)
+
+        self.assertTrue(missing_models.is_dir())
+        worker.assert_called_once()
+
+    def test_windows_curl_uses_best_effort_certificate_revocation(self) -> None:
+        model_file = ModelFile("tiny.gguf", "https://example.invalid/tiny.gguf", "0" * 64, 4)
+        part = Path(self.temporary.name) / "tiny.gguf.part"
+        captured_command: list[str] = []
+
+        class CompletedProcess:
+            returncode = 0
+
+            @staticmethod
+            def poll():
+                return 0
+
+            @staticmethod
+            def communicate():
+                return "", ""
+
+        def launch(command, **_kwargs):
+            captured_command.extend(command)
+            part.write_bytes(b"test")
+            return CompletedProcess()
+
+        with patch("local_ai.sys.platform", "win32"), patch("local_ai.subprocess.Popen", side_effect=launch):
+            self.manager._download_file_with_curl("curl.exe", model_file, part, 0, 0)
+
+        self.assertIn("--ssl-revoke-best-effort", captured_command)
+
 
 if __name__ == "__main__":
     unittest.main()
