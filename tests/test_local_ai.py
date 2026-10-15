@@ -112,6 +112,9 @@ class LocalAIManagerTests(unittest.TestCase):
             self.manager._download_file_with_curl("curl.exe", model_file, part, 0, 0)
 
         self.assertIn("--ssl-revoke-best-effort", captured_command)
+        self.assertIn("Cache-Control: no-cache", captured_command)
+        self.assertIn("Pragma: no-cache", captured_command)
+        self.assertTrue(captured_command[-1].startswith(f"{model_file.url}?facilities_download="))
 
 
 if __name__ == "__main__":

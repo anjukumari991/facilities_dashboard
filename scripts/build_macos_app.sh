@@ -24,6 +24,21 @@ if [[ "$PYTHON_VERSION" != "3.11" ]]; then
   exit 1
 fi
 
+print "Installing the declared application dependencies..."
+"$PYTHON_BIN" -m pip install --disable-pip-version-check -r "$REPO_DIR/dashboard/requirements.txt"
+
+# Fail early with a useful error instead of creating an app that can open but
+# cannot use chat or survey summarisation.
+"$PYTHON_BIN" - <<'PY'
+from openai import OpenAI
+from keyring import get_keyring
+import webview
+
+assert OpenAI
+assert get_keyring()
+assert webview
+PY
+
 LLAMA_SERVER_BIN="$(command -v llama-server 2>/dev/null || true)"
 [[ -n "$LLAMA_SERVER_BIN" ]] || [[ ! -x "/opt/homebrew/bin/llama-server" ]] || LLAMA_SERVER_BIN="/opt/homebrew/bin/llama-server"
 [[ -n "$LLAMA_SERVER_BIN" ]] || [[ ! -x "/usr/local/bin/llama-server" ]] || LLAMA_SERVER_BIN="/usr/local/bin/llama-server"
@@ -86,6 +101,23 @@ rsync -a \
 cp "$REPO_DIR/packaging/macos/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$REPO_DIR/packaging/macos/facilities_dashboard" "$CONTENTS_DIR/MacOS/facilities_dashboard"
 chmod +x "$CONTENTS_DIR/MacOS/facilities_dashboard"
+
+print "Validating bundled Python dependencies..."
+DYLD_FRAMEWORK_PATH="$CONTENTS_DIR/Frameworks" \
+PYTHONHOME="$PYTHON_DEST" \
+PYTHONNOUSERSITE=1 \
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH="$RESOURCES_DIR/site-packages:$RESOURCES_DIR/app/dashboard" \
+"$PYTHON_DEST/bin/python3.11" - <<'PY'
+from openai import OpenAI
+from keyring import get_keyring
+import webview
+
+assert OpenAI
+assert get_keyring()
+assert webview
+print("Bundled AI client and desktop dependencies are available.")
+PY
 
 SQUARE_ICON="$REPO_DIR/build/AppIcon-1024.png"
 mkdir -p "$REPO_DIR/build"

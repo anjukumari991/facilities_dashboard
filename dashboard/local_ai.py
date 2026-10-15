@@ -54,7 +54,7 @@ MODEL_CATALOG: tuple[LocalModel, ...] = (
         files=(
             ModelFile(
                 filename="qwen2.5-3b-instruct-q4_k_m.gguf",
-                url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/cc1e68eea5f05f88f41a6de1fc73110178f23715/qwen2.5-3b-instruct-q4_k_m.gguf?download=true",
+                url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
                 sha256="626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
                 size=2_104_932_768,
             ),
@@ -500,12 +500,25 @@ class LocalAIManager:
             return ["--ssl-revoke-best-effort"] if sys.platform == "win32" else []
 
         def attempt(resume: bool) -> tuple[int, str]:
+            separator = "&" if "?" in item.url else "?"
+            # Hugging Face stores large files behind short-lived Xet redirect
+            # URLs. Some enterprise proxies cache that redirect after it has
+            # expired and return HTTP 403. A unique, no-cache request forces a
+            # fresh signed location while the pinned SHA-256 still determines
+            # whether the downloaded model can be trusted.
+            download_url = f"{item.url}{separator}facilities_download={time.time_ns()}"
             command = [
                 curl,
                 "--location",
                 "--fail",
                 "--silent",
                 "--show-error",
+                "--user-agent",
+                "Facilities-Dashboard/1.0",
+                "--header",
+                "Cache-Control: no-cache",
+                "--header",
+                "Pragma: no-cache",
                 "--retry",
                 "5",
                 "--retry-delay",
@@ -519,7 +532,7 @@ class LocalAIManager:
             command.extend(tls_arguments())
             if resume:
                 command.extend(["--continue-at", "-"])
-            command.append(item.url)
+            command.append(download_url)
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
