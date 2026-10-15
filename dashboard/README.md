@@ -28,6 +28,11 @@ To build the single-file Windows executable locally without Docker, install Pyth
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_local.ps1 -Version 1.2.1
 ```
 
+Temporary build files are kept under
+`%LOCALAPPDATA%\FDBuild`, which avoids PySide6 path-length
+failures when this repository is located in a deeply nested OneDrive folder.
+The finished files are copied to `dist\windows-local`.
+
 The executable and checksum are written to `dist\windows-local`.
 
 The source launcher creates a Python virtual environment when required, installs the dependencies, and opens the dashboard in a native desktop window. Python 3.10 or newer is required only when running from source. The released executable does not require Python or WebView2 to be installed.

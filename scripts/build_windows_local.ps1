@@ -2,7 +2,8 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')]
     [string]$Version = "0.0.0-dev+local",
     [switch]$SkipTests,
-    [switch]$RecreateEnvironment
+    [switch]$RecreateEnvironment,
+    [string]$BuildRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,9 +11,22 @@ $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $RepositoryDirectory = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$EnvironmentDirectory = Join-Path $RepositoryDirectory ".venv-windows-build"
+
+# PySide6 contains deeply nested files. Keeping the build environment inside a
+# repository stored under OneDrive can exceed the legacy Windows MAX_PATH
+# limit. Use a short, local path for all disposable build files and copy only
+# the finished artifacts back into the repository.
+if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
+    $localBuildBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+    if ([string]::IsNullOrWhiteSpace($localBuildBase)) {
+        throw "Neither LOCALAPPDATA nor TEMP is available for the local build workspace."
+    }
+    $BuildRoot = Join-Path $localBuildBase "FDBuild"
+}
+$BuildRoot = [IO.Path]::GetFullPath($BuildRoot)
+$EnvironmentDirectory = Join-Path $BuildRoot "venv"
 $EnvironmentPython = Join-Path $EnvironmentDirectory "Scripts\python.exe"
-$BuildDirectory = Join-Path $RepositoryDirectory "build"
+$BuildDirectory = Join-Path $BuildRoot "build"
 $RuntimeArchive = Join-Path $BuildDirectory "llama-b11429-bin-win-cpu-x64.zip"
 $RuntimeExtractDirectory = Join-Path $BuildDirectory "llama-runtime-extracted"
 $RuntimeBundleDirectory = Join-Path $BuildDirectory "llama-runtime-bundle"
@@ -89,6 +103,11 @@ function Install-PinnedRuntime {
 
 Set-Location $RepositoryDirectory
 Write-Host "Building Facilities Dashboard $Version for Windows x64"
+Write-Host "Source:          $RepositoryDirectory"
+Write-Host "Local workspace: $BuildRoot"
+Write-Host "Output:          $OutputDirectory"
+
+New-Item -ItemType Directory -Force $BuildRoot | Out-Null
 
 if ($RecreateEnvironment -and (Test-Path $EnvironmentDirectory)) {
     Remove-Item -Recurse -Force $EnvironmentDirectory

@@ -1,15 +1,7 @@
 name: Build and release Windows executable
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Release tag, for example v1.0.0
-        required: true
-        default: v1.0.0
-        type: string
   push:
-    branches: [main]
     tags: ["v*"]
 
 permissions:
@@ -26,26 +18,13 @@ jobs:
 
       - name: Embed application version
         shell: pwsh
-        env:
-          REQUESTED_TAG: ${{ inputs.release_tag }}
         run: |
-          $releaseTag = ""
-          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
-            $releaseTag = $env:REQUESTED_TAG
-          } elseif ($env:GITHUB_REF -like "refs/tags/*") {
-            $releaseTag = $env:GITHUB_REF_NAME
+          $releaseTag = $env:GITHUB_REF_NAME
+          if ($releaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Release tag must use semantic versioning, for example v1.2.0."
           }
-
-          if ($releaseTag) {
-            if ($releaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
-              throw "Release tag must use semantic versioning, for example v1.2.0."
-            }
-            $appVersion = $releaseTag.Substring(1)
-            "RELEASE_TAG=$releaseTag" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          } else {
-            $shortSha = $env:GITHUB_SHA.Substring(0, 8)
-            $appVersion = "0.0.0-dev+$shortSha"
-          }
+          $appVersion = $releaseTag.Substring(1)
+          "RELEASE_TAG=$releaseTag" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
           "APP_VERSION = `"$appVersion`"" | Set-Content "dashboard/_build_version.py" -Encoding utf8
           "Building Facilities Dashboard version $appVersion"
@@ -136,7 +115,6 @@ jobs:
           retention-days: 1
 
       - name: Publish executable to GitHub Releases
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

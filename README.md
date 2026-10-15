@@ -62,7 +62,12 @@ To build the portable executable locally on a Windows x64 computer without Docke
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_local.ps1 -Version 1.2.1
 ```
 
-The script uses an isolated `.venv-windows-build` environment, downloads and verifies the pinned native `llama-server` runtime, runs the tests, and writes `dist\windows-local\facilities_dashboard.exe` plus its SHA-256 checksum. Add `-RecreateEnvironment` to rebuild the isolated environment or `-SkipTests` for a faster repeat build.
+The script keeps its temporary environment and PyInstaller files under
+`%LOCALAPPDATA%\FDBuild` to avoid Windows path-length errors,
+including when the repository is stored in OneDrive. The finished executable
+is written to `dist\windows-local` in the repository.
+
+The script uses an isolated environment in that local workspace, downloads and verifies the pinned native `llama-server` runtime, runs the tests, and writes `dist\windows-local\facilities_dashboard.exe` plus its SHA-256 checksum. Add `-RecreateEnvironment` to rebuild the isolated environment or `-SkipTests` for a faster repeat build.
 
 ### macOS
 
