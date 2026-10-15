@@ -7,11 +7,13 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
-from openpyxl import load_workbook
+from workbook_io import load_workbook_snapshot
 
 
 SUPPORTED_WORKBOOK_SUFFIXES = {".xlsx", ".xlsm"}
 REQUIRED_COLUMNS = ("Invoice Number", "Amount", "Description", "Date", "Period")
+WIP_SHEET_NAME = "TS-WIP"
+WIP_REQUIRED_COLUMNS = ("Reported Date", "Closed Date", "Activity", "Status", "Comments")
 CONTRACT_ICON_TYPES = {
     ".pdf": "pdf",
     ".doc": "word",
@@ -37,6 +39,7 @@ def _header_key(value: Any) -> str:
 
 
 HEADER_KEYS = {_header_key(name): name for name in REQUIRED_COLUMNS}
+WIP_HEADER_KEYS = {_header_key(name): name for name in WIP_REQUIRED_COLUMNS}
 
 
 def _amount(value: Any) -> float | None:
@@ -125,10 +128,28 @@ def _workplace_sheets(workbook) -> Iterable[tuple[Any, int, dict[str, int]]]:
                 break
 
 
-def _parse_file(path: Path) -> tuple[list[dict[str, Any]], int, int]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
+def _wip_sheet(workbook) -> tuple[Any, int, dict[str, int]] | None:
+    """Find the task table only on the explicitly named TS-WIP worksheet."""
+    sheet = next((item for item in workbook.worksheets if _normalized(item.title) == _normalized(WIP_SHEET_NAME)), None)
+    if sheet is None:
+        return None
+    for row_number in range(1, min(sheet.max_row, 15) + 1):
+        mapping: dict[str, int] = {}
+        for index, cell in enumerate(sheet[row_number], start=1):
+            canonical = WIP_HEADER_KEYS.get(_header_key(cell.value))
+            if canonical:
+                mapping[canonical] = index
+        if set(WIP_REQUIRED_COLUMNS).issubset(mapping):
+            return sheet, row_number, mapping
+    return None
+
+
+def _parse_file(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int, int]:
+    workbook = load_workbook_snapshot(path, read_only=True, data_only=True)
     records: list[dict[str, Any]] = []
+    wip_records: list[dict[str, Any]] = []
     invalid_rows = 0
+    invalid_wip_rows = 0
     period_mismatches = 0
     found_sheet = False
     try:
@@ -161,11 +182,41 @@ def _parse_file(path: Path) -> tuple[list[dict[str, Any]], int, int]:
                         "cost_type": _cost_type(description),
                     }
                 )
+        wip = _wip_sheet(workbook)
+        if wip:
+            sheet, header_row, columns = wip
+            for values in sheet.iter_rows(min_row=header_row + 1, values_only=True):
+                row = {name: values[index - 1] if index <= len(values) else None for name, index in columns.items()}
+                if not any(value not in (None, "") for value in row.values()):
+                    continue
+                reported_date = _invoice_date(row["Reported Date"])
+                closed_date = _invoice_date(row["Closed Date"])
+                activity = re.sub(r"\s+", " ", str(row["Activity"] or "")).strip()
+                status = re.sub(r"\s+", " ", str(row["Status"] or "")).strip()
+                comments = re.sub(r"\s+", " ", str(row["Comments"] or "")).strip()
+                if reported_date is None or not activity or not status:
+                    invalid_wip_rows += 1
+                    continue
+                completed = status.casefold() == "completed"
+                days_taken = None
+                if completed and closed_date is not None and closed_date >= reported_date:
+                    days_taken = (closed_date - reported_date).days
+                wip_records.append(
+                    {
+                        "reported_date": reported_date.isoformat(),
+                        "closed_date": closed_date.isoformat() if closed_date else "",
+                        "activity": activity[:500],
+                        "status": status[:100],
+                        "comments": comments[:1000],
+                        "days_taken": days_taken,
+                        "fiscal_year": fiscal_year_for_month(reported_date.replace(day=1)),
+                    }
+                )
     finally:
         workbook.close()
     if not found_sheet:
         raise ValueError(f"No sheet contains the required columns: {', '.join(REQUIRED_COLUMNS)}")
-    return records, invalid_rows, period_mismatches
+    return records, wip_records, invalid_rows, invalid_wip_rows, period_mismatches
 
 
 def discover_workplace_files(base_dir: Path | None) -> list[Path]:
@@ -227,8 +278,10 @@ def load_workplace(base_dir: Path | None) -> dict[str, Any]:
     files = discover_workplace_files(base_dir)
     contracts = discover_contracts(base_dir)
     by_invoice: dict[str, dict[str, Any]] = {}
+    wip_by_fingerprint: dict[str, dict[str, Any]] = {}
     invalid_files = 0
     invalid_rows = 0
+    invalid_wip_rows = 0
     period_mismatches = 0
     duplicate_count = 0
     conflicting_duplicates = 0
@@ -236,12 +289,13 @@ def load_workplace(base_dir: Path | None) -> dict[str, Any]:
 
     for path in files:
         try:
-            records, file_invalid_rows, file_period_mismatches = _parse_file(path)
+            records, file_wip_records, file_invalid_rows, file_invalid_wip_rows, file_period_mismatches = _parse_file(path)
         except Exception:
             invalid_files += 1
             continue
         parsed_files += 1
         invalid_rows += file_invalid_rows
+        invalid_wip_rows += file_invalid_wip_rows
         period_mismatches += file_period_mismatches
         for record in records:
             fingerprint = hashlib.sha256(
@@ -255,10 +309,20 @@ def load_workplace(base_dir: Path | None) -> dict[str, Any]:
             duplicate_count += 1
             if existing["fingerprint"] != fingerprint:
                 conflicting_duplicates += 1
+        for record in file_wip_records:
+            fingerprint = hashlib.sha256(
+                "\x1f".join(str(record[key]) for key in ("reported_date", "closed_date", "activity", "status", "comments")).encode("utf-8")
+            ).hexdigest()
+            wip_by_fingerprint.setdefault(fingerprint, record)
 
     records = sorted(by_invoice.values(), key=lambda row: (row["date"], row["invoice_number"]))
     for record in records:
         record.pop("fingerprint", None)
+    wip_records = sorted(
+        wip_by_fingerprint.values(),
+        key=lambda row: (row["reported_date"], row["activity"].casefold()),
+        reverse=True,
+    )
     months = sorted({record["month"] for record in records})
     fiscal_years = []
     by_fy: dict[str, set[str]] = defaultdict(set)
@@ -292,6 +356,7 @@ def load_workplace(base_dir: Path | None) -> dict[str, Any]:
     }
     return {
         "records": records,
+        "wip_records": wip_records,
         "contracts": contracts,
         "forecast": forecast,
         "meta": {
@@ -303,6 +368,8 @@ def load_workplace(base_dir: Path | None) -> dict[str, Any]:
             "conflicting_duplicates": conflicting_duplicates,
             "invalid_files": invalid_files,
             "invalid_rows": invalid_rows,
+            "invalid_wip_rows": invalid_wip_rows,
+            "wip_record_count": len(wip_records),
             "period_mismatches": period_mismatches,
             "contract_count": len(contracts),
             "storage_mode": "local_filesystem",

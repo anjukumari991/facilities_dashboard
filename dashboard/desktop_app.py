@@ -14,6 +14,8 @@ import webview
 from app import STATIC, DashboardState, create_server
 from chat_service import DEFAULT_AI_API_ENDPOINT, DashboardChatService, normalize_api_endpoint
 from local_storage import ExpenseLibrary
+from local_ai import LocalAIManager
+from local_ai_server import run_local_ai_server
 from secure_storage import SecureCredentialStore
 from updater import GitHubReleaseUpdater, UpdateError, schedule_window_close
 
@@ -25,7 +27,12 @@ class DesktopApi:
         settings = self.state.library.settings.load()
         if not str(settings.get("ai_api_endpoint") or "").strip():
             self.state.library.settings.update(ai_api_endpoint=DEFAULT_AI_API_ENDPOINT)
-        self.chat_service = DashboardChatService(state, self.credential_store)
+        self.local_ai = LocalAIManager(self.state.library.settings, self.credential_store)
+        self.chat_service = DashboardChatService(
+            state,
+            self.credential_store,
+            managed_endpoint=lambda: self.local_ai.endpoint,
+        )
         self.updater = GitHubReleaseUpdater()
         self.window: webview.Window | None = None
 
@@ -138,20 +145,65 @@ class DesktopApi:
         return {"currency": currency, "exchange_rate": normalized_rate}
 
     def get_settings_state(self) -> dict[str, Any]:
+        settings = self.state.library.settings.load()
+        local_ai = self.local_ai.state()
         credential_error = None
         try:
             token_configured = self.credential_store.has_openai_api_token()
         except RuntimeError as exc:
             token_configured = False
             credential_error = str(exc)
+        provider = local_ai["provider"]
         return {
             "base_dir": str(self.state.library.base_dir) if self.state.library.base_dir else None,
-            "api_endpoint": self.chat_service.configured_endpoint(),
-            "token_configured": token_configured,
+            "api_endpoint": settings.get("ai_api_endpoint") or DEFAULT_AI_API_ENDPOINT,
+            "effective_api_endpoint": self.chat_service.configured_endpoint(),
+            "ai_provider": provider,
+            # Detailed comment context is effective only for the app-managed
+            # loopback model. Keeping the configured preference while a custom
+            # provider is selected lets users switch back without re-enabling
+            # it, but no custom endpoint can receive that context.
+            "local_detailed_analysis": bool(settings.get("local_detailed_analysis")) and provider == "managed",
+            "token_configured": local_ai["selected_installed"] if provider == "managed" else token_configured,
             "credential_vault": self.credential_store.vault_name,
             "credential_error": credential_error,
+            "local_ai": local_ai,
             "updates": self.updater.local_state(),
         }
+
+    def get_local_ai_state(self) -> dict[str, Any]:
+        return self.local_ai.state()
+
+    def set_ai_provider(self, provider: str) -> dict[str, Any]:
+        return self.local_ai.set_provider(provider)
+
+    def set_local_detailed_analysis(self, enabled: bool) -> dict[str, Any]:
+        if not isinstance(enabled, bool):
+            raise ValueError("Local detailed analysis must be enabled or disabled.")
+        if enabled and self.local_ai.state()["provider"] != "managed":
+            raise ValueError("Local detailed analysis is available only with the app-managed local model.")
+        self.state.library.settings.update(local_detailed_analysis=enabled)
+        return {"ok": True, "local_detailed_analysis": enabled}
+
+    def select_local_ai_model(self, model_id: str) -> dict[str, Any]:
+        return self.local_ai.select(model_id)
+
+    def download_local_ai_model(self) -> dict[str, Any]:
+        self.local_ai.set_provider("managed")
+        return self.local_ai.download_selected()
+
+    def cancel_local_ai_download(self) -> dict[str, Any]:
+        return self.local_ai.cancel_download()
+
+    def start_local_ai(self) -> dict[str, Any]:
+        self.local_ai.set_provider("managed")
+        return self.local_ai.start()
+
+    def stop_local_ai(self) -> dict[str, Any]:
+        return self.local_ai.stop()
+
+    def remove_local_ai_model(self, model_id: str) -> dict[str, Any]:
+        return self.local_ai.remove(model_id)
 
     def check_for_updates(self) -> dict[str, Any]:
         try:
@@ -202,16 +254,36 @@ class DesktopApi:
         context: dict[str, Any] | None = None,
         history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        try:
+            self.local_ai.ensure_running()
+        except Exception as exc:
+            return {"ok": False, "code": "local_ai_unavailable", "error": str(exc)}
         return self.chat_service.ask(question, context, history)
 
     def summarize_survey_comments(self, survey_month: str | None = None) -> dict[str, Any]:
+        try:
+            self.local_ai.ensure_running()
+        except Exception as exc:
+            return {"ok": False, "code": "local_ai_unavailable", "error": str(exc)}
         return self.chat_service.summarize_survey_comments(survey_month)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Facility Expense Dashboard desktop application")
     parser.add_argument("--debug", action="store_true", help="Enable pywebview debug tools")
+    parser.add_argument("--managed-ai-server", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--model-path", help=argparse.SUPPRESS)
+    parser.add_argument("--model-id", help=argparse.SUPPRESS)
+    parser.add_argument("--port", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--api-key", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.managed_ai_server:
+        api_key = args.api_key or os.getenv("FACILITIES_LOCAL_AI_TOKEN")
+        if not all((args.model_path, args.model_id, args.port, api_key)):
+            parser.error("Managed AI server arguments are incomplete.")
+        run_local_ai_server(args.model_path, args.model_id, args.port, api_key)
+        return
 
     library = ExpenseLibrary()
     state = DashboardState(library)
@@ -238,6 +310,15 @@ def main() -> None:
         api.get_currency_preferences,
         api.set_currency_preferences,
         api.get_settings_state,
+        api.get_local_ai_state,
+        api.set_ai_provider,
+        api.set_local_detailed_analysis,
+        api.select_local_ai_model,
+        api.download_local_ai_model,
+        api.cancel_local_ai_download,
+        api.start_local_ai,
+        api.stop_local_ai,
+        api.remove_local_ai_model,
         api.check_for_updates,
         api.install_latest_update,
         api.save_ai_api_endpoint,
@@ -257,6 +338,7 @@ def main() -> None:
         else:
             webview.start(debug=args.debug, icon=str(STATIC / "app-icon.png"))
     finally:
+        api.local_ai.shutdown()
         server.shutdown()
         server.server_close()
         server_thread.join(timeout=5)

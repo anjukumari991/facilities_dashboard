@@ -34,6 +34,7 @@ class DashboardState:
         self.survey_error: str | None = None
         self.workplace_payload: dict = {
             "records": [],
+            "wip_records": [],
             "contracts": [],
             "forecast": {},
             "meta": {"months": [], "fiscal_years": [], "file_count": 0, "record_count": 0},
@@ -63,6 +64,7 @@ class DashboardState:
             self.survey_error = None
             self.workplace_payload = {
                 "records": [],
+                "wip_records": [],
                 "contracts": [],
                 "forecast": {},
                 "meta": {"months": [], "fiscal_years": [], "file_count": 0, "record_count": 0},
@@ -131,8 +133,7 @@ class DashboardState:
                 self.collaboration_error = None
                 return
             try:
-                stat = selected.path.stat()
-                signature = (str(selected.path), stat.st_mtime_ns, stat.st_size)
+                signature = (str(selected.path), selected.modified_ns, selected.size_bytes)
                 if not force and signature == self.collaboration_source_signature:
                     return
                 self.collaboration_payload = load_collaborations(selected.path)
@@ -174,8 +175,7 @@ class DashboardState:
                 return
 
             try:
-                stat = selected.path.stat()
-                signature = (str(selected.path), stat.st_mtime_ns, stat.st_size)
+                signature = (str(selected.path), selected.modified_ns, selected.size_bytes)
                 if not force and self.source_signature == signature:
                     return
                 parsed = load_expenses(selected.path)

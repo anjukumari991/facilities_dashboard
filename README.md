@@ -33,11 +33,18 @@ Use **Settings** to change or open the base location. Refresh reloads expenses, 
 
 The **Collaborations** tab reads the `Facilities Team Collaboration` sheet from the active expense workbook. Required columns are `Month`, `Department`, `Activity / Collaboration`, `Status`, `Timeline`, and `Outcome`. It uses July–June Plan Years and derives departments and statuses from the data, so newly added status values appear automatically. Its team-distribution pie shows activity counts and lists each team's selected activities on hover or keyboard focus.
 
-## AI API connection
+## AI assistant
 
-An optional OpenAI-compatible API connection enables **Ask Dashboard** on every tab. The editable API endpoint is stored in the ordinary per-user application settings and defaults to `http://127.0.0.1:12345/v1`. The masked token is stored only in the operating system credential vault: Windows Credential Manager on Windows or Keychain on macOS. The token is never written to the dashboard settings file, returned to the browser interface, or committed to the repository. Settings also provides a connection test that verifies authentication, model discovery, and a small chat completion from the local computer.
+**Settings → AI assistant** can use either a model managed by this app or a custom OpenAI-compatible endpoint.
 
-Ask Dashboard uses tab-specific context and read-only aggregate tools. Survey names, email addresses, IDs and other identity columns are excluded at the parser boundary. The Survey Report reads only explicitly recognised comment/feedback columns and masks contact details, explicit identifiers and recognisable personal-name patterns locally. Those masked comments are sent to the configured AI endpoint only after the user confirms **Summarize**; ordinary Ask Dashboard chat never receives them. Raw expense rows and filenames are also never provided to the AI service. Collaboration chat receives only aggregate counts and rates; Activity, Timeline, Outcome, workbook information, audit-report filenames, and individual rows remain local. Survey aggregates with fewer than five responses are suppressed in chat. Conversation history stays in the current app session. Without a saved token, AI features report that support is unavailable and make no request.
+- In managed mode, choose Fast (Qwen 2.5 3B), Balanced (Qwen 2.5 7B), or Quality (Qwen 3 8B). The selected GGUF model is downloaded only when requested, resumes after interruption, and must pass its pinned SHA-256 check before use. Model files live outside the application under `%LOCALAPPDATA%\Facility Expense Dashboard\models` on Windows or `~/Library/Application Support/Facility Expense Dashboard/models` on macOS. Windows runs CPU-first for the target 16 GB integrated-graphics computer; Apple silicon uses Metal acceleration.
+- In custom mode, the editable endpoint is stored in ordinary per-user settings and defaults to `http://127.0.0.1:12345/v1`. The masked token is stored only in Windows Credential Manager or macOS Keychain. It is never written to the settings file, returned to the browser interface, or committed.
+
+The local inference runtime is bundled in packaged applications, but the multi-gigabyte model weights are not. The app starts and stops a private loopback OpenAI-compatible server automatically, so the existing client and privacy guardrails are shared by both modes.
+
+Ask Dashboard uses tab-specific context and read-only aggregate tools. Survey names, email addresses, IDs and other identity columns are excluded at the parser boundary. The Survey Report reads only explicitly recognised comment/feedback columns and masks contact details, explicit identifiers and recognisable personal-name patterns locally. Those masked comments are sent to the active AI endpoint only after the user confirms **Summarize**; ordinary Ask Dashboard chat never receives them. Raw expense rows and filenames are also never provided to the AI service. Collaboration chat receives only aggregate counts and rates; Activity, Timeline, Outcome, workbook information, audit-report filenames, and individual rows remain local. Survey aggregates with fewer than five responses are suppressed in chat. Conversation history stays in the current app session. Without a downloaded local model or saved custom token, AI features report that support is unavailable and make no request.
+
+Chat scope is enforced by the application, not only by model instructions. Each conversation is locked to its active tab and receives only that tab's allowlisted aggregate tools. Explicit cross-tab, general web/news/weather, prompt-bypass, and raw-record requests are rejected locally. Expense forecasts may use the app's fixed public-holiday calendar source; the model cannot choose a URL or browse arbitrary sites. The forecast uses workbook-derived monthly average attendance, monthly average per-person cost and average fixed cost. Holiday and working-day adjustments are applied only from dated sourced facts, while a long-weekend attendance factor is applied only when enough comparable workbook history exists. If the source is unavailable, the forecast explicitly omits the adjustment instead of guessing. A normal analytical answer is shown only after at least one aggregate calculation. When a user requests a chart or graph, the application creates a constrained line, bar, or pie specification from returned aggregate rows and renders it locally; the model cannot provide executable chart code or raw data.
 
 ## Start the application
 
@@ -53,6 +60,10 @@ Each published build must use a new semantic release tag such as `v1.1.0`. Reusi
 
 Double-click `Start Expense Dashboard.command`.
 
+On first launch, the source launcher installs Homebrew's prebuilt `llama.cpp` runtime when local AI is not already available. This avoids compiling `llama-cpp-python` on the user's computer. If Homebrew is unavailable, the launcher tries the Python/Metal build as a fallback; a failure of either optional path does not prevent the dashboard or custom OpenAI-compatible endpoints from working.
+
+For a standalone `.app`, install the requirements in the Python 3.11 environment and run `scripts/build_macos_app.sh`. The script checks that the local AI runtime is included and prints the Metal-enabled installation command if it is missing.
+
 ### Windows (from source)
 
 Double-click `Start Expense Dashboard.bat`.
@@ -62,3 +73,5 @@ The first launch creates a local virtual environment and installs the required d
 ## Privacy
 
 Expense and survey workbooks, generated outputs, presentations, local environments, and internal feedback are excluded from Git. The application does not read Google Sheets. Source workbooks stay local. Ask Dashboard sends only anonymised aggregate results; Survey Summarize sends only locally masked comment text after explicit confirmation.
+
+When the base directory is inside OneDrive, mark it **Always keep on this device** and wait for the green check mark before the first load. The app reads Excel files through a retrying in-memory snapshot and closes workbook handles after parsing, so brief Excel/OneDrive locks retain the last successfully loaded dashboard instead of leaving it in a loading state.

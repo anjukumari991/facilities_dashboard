@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from openpyxl import load_workbook
+from workbook_io import load_workbook_snapshot
 
 
 SHEET_NAME = "Facilities Team Collaboration"
@@ -185,8 +185,7 @@ def _load_workbook_payload(workbook: Any) -> dict[str, Any]:
 
 
 def load_collaborations(source: str | Path | bytes | BytesIO) -> dict[str, Any]:
-    workbook_source = BytesIO(source) if isinstance(source, bytes) else source
-    workbook = load_workbook(workbook_source, data_only=True, read_only=True)
+    workbook = load_workbook_snapshot(source, data_only=True, read_only=True)
     try:
         return _load_workbook_payload(workbook)
     finally:

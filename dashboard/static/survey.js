@@ -261,7 +261,7 @@
     const host=document.querySelector("#surveySummaryContent");
     const context=document.querySelector("#surveySummaryContext");
     context.textContent=selection==="all"?"Analyzing comments across all survey periods…":`Analyzing comments from ${monthLabel(selection)}…`;
-    host.innerHTML=`<div class="survey-summary-loading" role="status" aria-live="polite"><span class="survey-summary-spinner" aria-hidden="true"></span><strong>Summarizing comments…</strong><span>Reviewing ${commentCount} anonymized comment${commentCount===1?"":"s"}. This can take up to 90 seconds with a local AI model.</span></div>`;
+    host.innerHTML=`<div class="survey-summary-loading" role="status" aria-live="polite"><span class="survey-summary-spinner" aria-hidden="true"></span><strong>Summarizing comments…</strong><span>Reviewing ${commentCount} anonymized comment${commentCount===1?"":"s"}. A local AI model may take several minutes.</span></div>`;
   }
 
   function renderSummary(selection){
@@ -272,9 +272,7 @@
     if(!cached){host.innerHTML=summaryEmpty();return;}
     const definitions=[
       ["appreciations","Appreciations","What employees value","#087f52"],
-      ["employee_asks","Employee asks","Requested changes or support","#2f80ed"],
-      ["focus_areas","Focus areas","Recurring concerns needing attention","#d97706"],
-      ["suggested_actions","Suggested actions","AI-generated proposals","#7c3aed"],
+      ["employee_asks","Employee Asks","Consolidated requests and follow-up actions","#2f80ed"],
     ];
     host.innerHTML=definitions.map(([key,title,note,color])=>{
       const items=Array.isArray(cached.summary?.[key])?cached.summary[key]:[];

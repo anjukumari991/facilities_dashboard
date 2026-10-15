@@ -18,7 +18,7 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -56,12 +56,15 @@ jobs:
           python-version: "3.12"
           architecture: x64
           cache: pip
-          cache-dependency-path: dashboard/requirements.txt
+          cache-dependency-path: |
+            dashboard/requirements.txt
+            dashboard/requirements-local-ai.txt
 
       - name: Install dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
+          python -m pip install -r dashboard/requirements-local-ai.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
           python -m pip install -r dashboard/requirements.txt pyinstaller pillow
 
       - name: Run updater tests
@@ -88,6 +91,7 @@ jobs:
             --collect-data webview `
             --collect-all keyring `
             --collect-all openai `
+            --collect-all llama_cpp `
             --hidden-import webview.platforms.qt `
             dashboard/desktop_app.py
 
@@ -105,7 +109,9 @@ jobs:
             dist/facilities_dashboard.exe
             dist/facilities_dashboard.exe.sha256
           if-no-files-found: error
-          retention-days: 14
+          # GitHub Releases keeps the downloadable EXE for tagged builds.
+          # This short-lived duplicate is only for immediate workflow debugging.
+          retention-days: 1
 
       - name: Publish executable to GitHub Releases
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')

@@ -2,6 +2,7 @@ FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PYTHON_VERSION=3.12.9
+ARG APP_VERSION=0.0.0-dev+local
 
 ENV WINEARCH=win64 \
     WINEPREFIX=/opt/wine-prefix \
@@ -43,8 +44,12 @@ RUN wget -q "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON
     xvfb-run -a wine 'C:\Python312\python.exe' --version
 
 COPY dashboard/requirements.txt /tmp/facilities-requirements.txt
+COPY dashboard/requirements-local-ai.txt /tmp/facilities-requirements-local-ai.txt
 
 RUN xvfb-run -a wine 'C:\Python312\python.exe' -m pip install --upgrade pip \
+    && xvfb-run -a wine 'C:\Python312\python.exe' -m pip install \
+        -r 'Z:\tmp\facilities-requirements-local-ai.txt' \
+        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
     && xvfb-run -a wine 'C:\Python312\python.exe' -m pip install \
         -r 'Z:\tmp\facilities-requirements.txt' \
         pyinstaller \
@@ -53,6 +58,8 @@ RUN xvfb-run -a wine 'C:\Python312\python.exe' -m pip install --upgrade pip \
 WORKDIR /workspace
 COPY dashboard/ ./dashboard/
 COPY tests/ ./tests/
+
+RUN printf 'APP_VERSION = "%s"\n' "${APP_VERSION}" > dashboard/_build_version.py
 
 RUN xvfb-run -a wine 'C:\Python312\python.exe' -m unittest discover -s tests -v
 
@@ -70,6 +77,8 @@ RUN xvfb-run -a wine 'C:\Python312\python.exe' -m PyInstaller \
         --collect-data webview \
         --collect-all keyring \
         --collect-all openai \
+        --collect-all llama_cpp \
         --hidden-import webview.platforms.qt \
         dashboard/desktop_app.py \
-    && sha256sum dist/facilities_dashboard.exe > dist/facilities_dashboard.exe.sha256
+    && cd dist \
+    && sha256sum facilities_dashboard.exe > facilities_dashboard.exe.sha256

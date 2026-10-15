@@ -30,6 +30,19 @@ def user_settings_directory() -> Path:
     return (Path(root) if root else Path.home() / ".config") / APP_DIRECTORY_NAME
 
 
+def user_data_directory() -> Path:
+    """Return a per-user directory suitable for large downloaded model files."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_DIRECTORY_NAME
+    if os.name == "nt":
+        root = os.getenv("LOCALAPPDATA")
+        if root:
+            return Path(root) / APP_DIRECTORY_NAME
+        return Path.home() / "AppData" / "Local" / APP_DIRECTORY_NAME
+    root = os.getenv("XDG_DATA_HOME")
+    return (Path(root) if root else Path.home() / ".local" / "share") / APP_DIRECTORY_NAME
+
+
 class SettingsStore:
     def __init__(self, path: Path | None = None):
         self.path = path or user_settings_directory() / SETTINGS_FILENAME
@@ -183,31 +196,44 @@ class ExpenseLibrary:
                 return []
 
             entries: list[WorkbookEntry] = []
+            previous_entries = {entry.identifier: entry for entry in self.entries}
             for path in expenses_dir.rglob("*"):
-                if (
-                    not path.is_file()
-                    or path.is_symlink()
-                    or path.name.startswith("~$")
-                    or path.suffix.casefold() not in SUPPORTED_WORKBOOK_SUFFIXES
-                ):
-                    continue
-                relative = path.relative_to(expenses_dir)
-                if any(part.startswith(".") for part in relative.parts):
-                    continue
-                stat = path.stat()
-                relative_path = relative.as_posix()
-                group = relative.parent.as_posix() if relative.parent != Path(".") else "Expenses"
-                entries.append(
-                    WorkbookEntry(
-                        identifier=relative_path,
-                        path=path.resolve(),
-                        relative_path=relative_path,
-                        group=group,
-                        modified_at=datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds"),
-                        modified_ns=stat.st_mtime_ns,
-                        size_bytes=stat.st_size,
+                try:
+                    if (
+                        not path.is_file()
+                        or path.is_symlink()
+                        or path.name.startswith("~$")
+                        or path.suffix.casefold() not in SUPPORTED_WORKBOOK_SUFFIXES
+                    ):
+                        continue
+                    relative = path.relative_to(expenses_dir)
+                    if any(part.startswith(".") for part in relative.parts):
+                        continue
+                    stat = path.stat()
+                    relative_path = relative.as_posix()
+                    group = relative.parent.as_posix() if relative.parent != Path(".") else "Expenses"
+                    entries.append(
+                        WorkbookEntry(
+                            identifier=relative_path,
+                            path=path.resolve(),
+                            relative_path=relative_path,
+                            group=group,
+                            modified_at=datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds"),
+                            modified_ns=stat.st_mtime_ns,
+                            size_bytes=stat.st_size,
+                        )
                     )
-                )
+                except OSError:
+                    # OneDrive may briefly deny metadata access during sync.
+                    # Preserve the last known entry instead of switching the
+                    # selected workbook or emptying the dashboard.
+                    try:
+                        identifier = path.relative_to(expenses_dir).as_posix()
+                    except ValueError:
+                        continue
+                    previous = previous_entries.get(identifier)
+                    if previous is not None:
+                        entries.append(previous)
 
             self.entries = sorted(entries, key=lambda entry: entry.relative_path.casefold())
             available_ids = {entry.identifier for entry in self.entries}

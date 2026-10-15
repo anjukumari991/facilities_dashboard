@@ -7,8 +7,8 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
-from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
+from workbook_io import load_workbook_snapshot
 
 
 SUPPORTED_SUFFIXES = {".xlsx", ".xlsm"}
@@ -267,7 +267,7 @@ def _response_fingerprint(record: dict[str, Any]) -> str:
 
 def _parse_file(path: Path) -> list[dict[str, Any]]:
     try:
-        workbook = load_workbook(path, read_only=True, data_only=True)
+        workbook = load_workbook_snapshot(path, read_only=True, data_only=True)
     except Exception as exc:
         raise SurveyFileError(
             "unreadable_workbook",

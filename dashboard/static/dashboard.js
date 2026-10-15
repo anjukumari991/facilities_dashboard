@@ -1,6 +1,8 @@
 const COLORS={Lunch:"#00a94f","Kitchen Supplies":"#2f80ed","Office supplies":"#8a63d2","Car Rental, Taxi & Other":"#d97706",Rent:"#0f766e",Pantry:"#2f80ed",Miscellaneous:"#8a63d2",Fruits:"#f2a93b",Workspace:"#0f766e",Travel:"#d97706",Courier:"#64748b",Unclassified:"#9aa9a5",Other:"#9aa9a5"};
 const MISC_COLORS={Stationery:"#f2a93b",Flowers:"#d9488c",Medicine:"#8a63d2",Medicines:"#8a63d2",Office:"#2f80ed","Meeting Room & Reception":"#00a94f","Sent to Emp":"#d97706","New Joiners":"#0f766e",Other:"#9aa9a5"};
 const PIE_COLORS=["#00a94f","#2f80ed","#8a63d2","#f2a93b","#0f766e","#d97706","#d9485f","#64748b"];
+const PLAN_YEAR_COLORS=["#087f52","#2f80ed","#8a63d2","#d97706","#d9485f","#0f766e","#b45309","#64748b"];
+const COMPARISON_MONTHS=["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"];
 const LUNCH_BUDGET=200;
 const DEFAULT_USD_TO_INR_RATE=96;
 const CURRENCY_STORAGE_KEY="facilities-dashboard-currency-preferences";
@@ -12,6 +14,8 @@ let bootstrapped=false;
 let currencyPreferencesLoaded=false;
 let displayCurrency="INR";
 let usdToInrRate=DEFAULT_USD_TO_INR_RATE;
+const hiddenMonthlyPlanYears=new Set();
+let localAiPollTimer=null;
 
 const currencyLocale=()=>displayCurrency==="USD"?"en-US":"en-IN";
 const convertedAmount=value=>displayCurrency==="USD"?Number(value)/usdToInrRate:Number(value);
@@ -56,6 +60,7 @@ const categoryColor=category=>{
   const hash=[...String(category||"")].reduce((value,char)=>((value*31)+char.charCodeAt(0))>>>0,0);
   return PIE_COLORS[hash%PIE_COLORS.length];
 };
+const planYearColor=index=>PLAN_YEAR_COLORS[index]||`hsl(${Math.round((index*137.508+155)%360)} 62% 42%)`;
 
 function browserCurrencyPreferences(){
   try{
@@ -103,9 +108,28 @@ async function saveCurrencyPreferences(){
 
 async function loadData(message="Refreshing local workbook…"){
   setStatus(message);
-  const response=await fetch("/api/data",{cache:"no-store"});
-  const result=await response.json();
-  if(result.error){clearDashboardData();throw new Error(result.error);}
+  let response,result;
+  try{
+    response=await fetch("/api/data",{cache:"no-store"});
+    result=await response.json();
+  }catch(error){
+    const detail=error.message||String(error);
+    setStatus(`Workbook refresh failed: ${detail}`);
+    throw error;
+  }
+  if(result.error){
+    if(result.meta?.months?.length){
+      payload=result;
+      initialiseFilters();
+      window.AuditReports?.render?.();
+      render();
+      setStatus(`Showing the last successfully loaded expense data. ${result.error}`);
+      return payload;
+    }
+    clearDashboardData();
+    setStatus(result.error);
+    throw new Error(result.error);
+  }
   payload=result;
   if(!payload.meta?.months?.length){clearDashboardData();throw new Error("This workbook has no valid expense rows to display.");}
   initialiseFilters();
@@ -114,6 +138,7 @@ async function loadData(message="Refreshing local workbook…"){
   const latest=payload.meta.months.at(-1);
   const source=payload.meta.source_relative_path||payload.meta.source_name;
   setStatus(`Loaded ${payload.meta.record_count} rows from ${source}${latest?` through ${monthLabel(latest)}`:""}`);
+  return payload;
 }
 
 function setStatus(text){document.querySelector("#status").textContent=text;}
@@ -382,44 +407,105 @@ function renderBuckets(view){
 function renderMonthlyTrend(view){
   const chart=document.querySelector("#monthlyTrendChart");
   const legend=document.querySelector("#monthlyTrendLegend");
-  const months=payload.meta.months;
-  const monthRows=months.map(month=>payload.records.filter(row=>row.month===month&&(view.group==="All"||row.report_category===view.group)));
-  const values=monthRows.map(rows=>sum(rows,"amount_inr"));
-  const peopleValues=monthRows.map(rows=>{
-    const counts=rows.filter(row=>row.actual_count!=null&&Number.isFinite(Number(row.actual_count))).map(row=>Number(row.actual_count));
-    return counts.length?counts.reduce((total,value)=>total+value,0)/counts.length:null;
+  const categoryRows=payload.records.filter(row=>view.group==="All"||row.report_category===view.group);
+  const rowsByMonth=new Map();
+  categoryRows.forEach(row=>{
+    if(!rowsByMonth.has(row.month))rowsByMonth.set(row.month,[]);
+    rowsByMonth.get(row.month).push(row);
   });
-  if(!months.length){
+  const startYears=[...new Set(categoryRows.map(row=>planYearStartForMonth(row.month)))].sort((left,right)=>left-right);
+  if(!startYears.length){
     chart.innerHTML='<div class="empty">No monthly data is available</div>';
     legend.innerHTML="";
     return;
   }
-  const average=values.reduce((total,value)=>total+value,0)/values.length;
-  const max=Math.max(1,average,...values)*1.12;
-  const W=Math.max(820,months.length*60),H=235,p={l:70,r:22,t:16,b:38},plotW=W-p.l-p.r,plotH=H-p.t-p.b;
-  const x=index=>p.l+index*plotW/Math.max(1,months.length-1);
+  const availableLabels=new Set(startYears.map(planYearLabel));
+  [...hiddenMonthlyPlanYears].forEach(label=>{
+    if(!availableLabels.has(label))hiddenMonthlyPlanYears.delete(label);
+  });
+  const series=startYears.map((startYear,seriesIndex)=>{
+    const months=Array.from({length:12},(_,monthIndex)=>{
+      const calendarMonth=(monthIndex+6)%12;
+      const calendarYear=startYear+(monthIndex>=6?1:0);
+      const iso=`${calendarYear}-${String(calendarMonth+1).padStart(2,"0")}-01`;
+      const rows=rowsByMonth.get(iso);
+      if(!rows?.length)return null;
+      const counts=rows
+        .filter(row=>row.actual_count!=null&&Number.isFinite(Number(row.actual_count)))
+        .map(row=>Number(row.actual_count));
+      return {
+        iso,
+        value:sum(rows,"amount_inr"),
+        totalCount:counts.length?counts.reduce((total,value)=>total+value,0):null,
+      };
+    });
+    const plotted=months.filter(Boolean);
+    return {
+      startYear,
+      label:planYearLabel(startYear),
+      color:planYearColor(seriesIndex),
+      months,
+      average:plotted.length?plotted.reduce((total,month)=>total+month.value,0)/plotted.length:null,
+    };
+  });
+  const visibleSeries=series.filter(item=>!hiddenMonthlyPlanYears.has(item.label));
+  const visibleValues=visibleSeries.flatMap(item=>[
+    ...item.months.filter(Boolean).map(month=>month.value),
+    ...(item.average==null?[]:[item.average]),
+  ]);
+  const max=Math.max(1,...visibleValues)*1.12;
+  const W=920,H=270,p={l:82,r:24,t:18,b:54},plotW=W-p.l-p.r,plotH=H-p.t-p.b;
+  const x=index=>p.l+index*plotW/(COMPARISON_MONTHS.length-1);
   const y=value=>p.t+plotH-value/max*plotH;
-  let svg=`<svg viewBox="0 0 ${W} ${H}" style="min-width:${Math.max(640,months.length*52)}px" role="img" aria-label="Monthly spend by month and year for ${esc(view.group==="All"?"all categories":view.group)}">`;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly spend comparison by plan year for ${esc(view.group==="All"?"all categories":view.group)}">`;
   for(let index=0;index<=4;index++){
     const value=max*index/4,axisY=p.t+plotH-index*plotH/4;
     svg+=`<line class="gridline" x1="${p.l}" x2="${W-p.r}" y1="${axisY}" y2="${axisY}"/><text class="axis-label" x="${p.l-10}" y="${axisY+4}" text-anchor="end">${compact(value)}</text>`;
   }
-  const averageY=y(average);
-  svg+=`<line class="monthly-average-line" x1="${p.l}" x2="${W-p.r}" y1="${averageY}" y2="${averageY}"/><text class="monthly-average-label" x="${W-p.r}" y="${Math.max(12,averageY-7)}" text-anchor="end">Average ${money.format(average)}</text>`;
-  const points=values.map((value,index)=>[x(index),y(value)]);
-  if(points.length>1)svg+=`<path class="monthly-trend-line" d="${points.map((point,index)=>`${index?"L":"M"}${point[0]} ${point[1]}`).join(" ")}"/>`;
-  points.forEach((point,index)=>{
-    const people=peopleValues[index];
-    const costPerPerson=people?values[index]/people:null;
-    const peopleText=people==null?"Not recorded":numberOne.format(people);
-    const costText=costPerPerson==null?"Not available":moneyOne.format(costPerPerson);
-    const accessibleLabel=`${monthLabel(months[index])}. Spend ${money.format(values[index])}. Average people ${peopleText}. Spend per average person ${costText}.`;
-    svg+=`<circle class="monthly-trend-point chart-tooltip-target" cx="${point[0]}" cy="${point[1]}" r="6" tabindex="0" role="img" aria-label="${esc(accessibleLabel)}" data-chart-tooltip data-tooltip-title="${esc(monthLabel(months[index]))}" data-tooltip-line-one="Spend: ${esc(money.format(values[index]))}" data-tooltip-line-two="Average people: ${esc(peopleText)}" data-tooltip-line-three="Spend / average person: ${esc(costText)}"><title>${esc(accessibleLabel)}</title></circle>`;
-    svg+=`<text class="axis-label" x="${point[0]}" y="${H-18}" text-anchor="middle">${compactMonth(months[index])}</text>`;
+  svg+=`<text class="axis-title" x="16" y="${p.t+plotH/2}" text-anchor="middle" transform="rotate(-90 16 ${p.t+plotH/2})">Amount (${displayCurrency})</text>`;
+  COMPARISON_MONTHS.forEach((month,index)=>{
+    svg+=`<text class="axis-label" x="${x(index)}" y="${H-27}" text-anchor="middle">${month}</text>`;
   });
+  svg+=`<text class="axis-title" x="${p.l+plotW/2}" y="${H-5}" text-anchor="middle">Month</text>`;
+  visibleSeries.forEach(item=>{
+    if(item.average!=null){
+      const averageY=y(item.average);
+      svg+=`<line class="monthly-average-line" style="stroke:${item.color}" x1="${p.l}" x2="${W-p.r}" y1="${averageY}" y2="${averageY}"><title>${esc(item.label)} monthly average: ${esc(money.format(item.average))}</title></line>`;
+    }
+    let path="",continues=false;
+    item.months.forEach((month,index)=>{
+      if(!month){continues=false;return;}
+      path+=`${continues?" L":" M"}${x(index)} ${y(month.value)}`;
+      continues=true;
+    });
+    if(path)svg+=`<path class="monthly-trend-line" style="stroke:${item.color}" d="${path.trim()}"/>`;
+    item.months.forEach((month,index)=>{
+      if(!month)return;
+      const totalCount=month.totalCount;
+      const costPerPerson=totalCount?month.value/totalCount:null;
+      const countText=totalCount==null?"Not recorded":numberOne.format(totalCount);
+      const costText=costPerPerson==null?"Not available":moneyOne.format(costPerPerson);
+      const accessibleLabel=`${monthLabel(month.iso)}, ${item.label}. Spend ${money.format(month.value)}. Total count ${countText}. Spend per person ${costText}.`;
+      svg+=`<circle class="monthly-trend-point chart-tooltip-target" style="--point-color:${item.color}" cx="${x(index)}" cy="${y(month.value)}" r="5" tabindex="0" role="img" aria-label="${esc(accessibleLabel)}" data-chart-tooltip data-tooltip-title="${esc(`${monthLabel(month.iso)} · ${item.label}`)}" data-tooltip-line-one="Spend: ${esc(money.format(month.value))}" data-tooltip-line-two="Total count: ${esc(countText)}" data-tooltip-line-three="Spend / person: ${esc(costText)}"><title>${esc(accessibleLabel)}</title></circle>`;
+    });
+  });
+  if(!visibleSeries.length)svg+=`<text class="monthly-empty-selection" x="${p.l+plotW/2}" y="${p.t+plotH/2}" text-anchor="middle">Select a plan year from the legend</text>`;
   svg+="</svg>";
   chart.innerHTML=svg;
-  legend.innerHTML=`<span><i style="background:#087f52"></i>Monthly spend</span><span><i style="background:#d97706"></i>Average ${money.format(average)}</span>`;
+  legend.innerHTML=series.map(item=>{
+    const hidden=hiddenMonthlyPlanYears.has(item.label);
+    const averageText=item.average==null?"No data":`Avg ${money.format(item.average)}`;
+    return `<button type="button" class="monthly-series-toggle${hidden?" is-hidden":""}" data-plan-year="${esc(item.label)}" aria-pressed="${hidden?"false":"true"}" title="${hidden?"Show":"Hide"} ${esc(item.label)}"><span class="monthly-series-swatch" style="--series-color:${item.color}"><i></i><i></i></span><span>${esc(item.label)}</span><small>${esc(averageText)}</small></button>`;
+  }).join("");
+}
+
+function cloneExpandedMonthlyTrend(){
+  const sourcePanel=document.querySelector("#monthlyTrendChart")?.closest(".chart-panel");
+  if(!sourcePanel)return null;
+  const clone=sourcePanel.cloneNode(true);
+  clone.querySelectorAll(".expand-chart-button").forEach(button=>button.remove());
+  clone.querySelectorAll("[id]").forEach(element=>element.removeAttribute("id"));
+  return clone;
 }
 
 function chartDataTooltip(){
@@ -544,7 +630,17 @@ function pieChartMarkup(categories,ariaLabel){
 
 function renderTrend(view){
   const groups=reportCategories().filter(group=>view.rows.some(row=>row.report_category===group));
-  const series=view.months.map(month=>({month,values:Object.fromEntries(groups.map(group=>[group,sum(view.rows.filter(row=>row.month===month&&row.report_category===group),"amount_inr")]))}));
+  const series=view.months.map(month=>({
+    month,
+    values:Object.fromEntries(groups.map(group=>[group,sum(view.rows.filter(row=>row.month===month&&row.report_category===group),"amount_inr")])),
+    expenseTypes:Object.fromEntries(groups.map(group=>[
+      group,
+      [...new Set(view.rows
+        .filter(row=>row.month===month&&row.report_category===group)
+        .map(row=>String(row.category||"").trim())
+        .filter(Boolean))].sort((left,right)=>left.localeCompare(right)),
+    ])),
+  }));
   const totals=series.map(item=>Object.values(item.values).reduce((a,b)=>a+b,0));
   const max=Math.max(1,...totals)*1.14;
   const W=850,H=325,p={l:65,r:18,t:30,b:52};
@@ -562,7 +658,11 @@ function renderTrend(view){
       const value=item.values[group]||0;
       const height=value/max*plotH;
       base-=height;
-      svg+=`<rect x="${x}" y="${base}" width="${barW}" height="${Math.max(0,height)}" fill="${categoryColor(group)}"><title>${group}: ${money.format(value)}</title></rect>`;
+      const expenseTypes=item.expenseTypes[group]||[];
+      const expenseTypeText=expenseTypes.length?expenseTypes.join(", "):"Not specified";
+      const tooltipLines=[`Amount: ${money.format(value)}`,`Expense types: ${expenseTypeText}`,`Month: ${monthLabel(item.month)}`];
+      const accessibleLabel=`${group}. ${tooltipLines.join(". ")}`;
+      svg+=`<rect class="chart-tooltip-target" x="${x}" y="${base}" width="${barW}" height="${Math.max(0,height)}" fill="${categoryColor(group)}" tabindex="0" role="img" aria-label="${esc(accessibleLabel)}" data-chart-tooltip data-tooltip-title="${esc(group)}" data-tooltip-lines="${esc(JSON.stringify(tooltipLines))}"><title>${esc(accessibleLabel)}</title></rect>`;
       if(height>25&&value>0)svg+=`<text class="segment-label" x="${x+barW/2}" y="${base+height/2+4}" text-anchor="middle">${compact(value)}</text>`;
     });
     const totalLabel=series.length>6?compact(totals[index]):money.format(totals[index]);
@@ -719,6 +819,19 @@ function renderSettingsState(state){
   const tokenStatus=document.querySelector("#tokenStatus");
   const deleteButton=document.querySelector("#deleteTokenButton");
   const openFolderButton=document.querySelector("#openFolderButton");
+  const provider=state?.ai_provider==="managed"?"managed":"custom";
+  document.querySelector("#aiProviderSelect").value=provider;
+  document.querySelector("#managedAiSettings").hidden=provider!=="managed";
+  document.querySelector("#customAiSettings").hidden=provider!=="custom";
+  const detailedToggle=document.querySelector("#localDetailedAnalysis");
+  detailedToggle.checked=Boolean(state?.local_detailed_analysis);
+  detailedToggle.disabled=provider!=="managed";
+  const detailedStatus=document.querySelector("#localDetailedAnalysisStatus");
+  detailedStatus.textContent=detailedToggle.checked
+    ?"Enabled. Survey chat may use a limited set of locally masked comments."
+    :"Off. Survey chat uses anonymised aggregates only.";
+  detailedStatus.className=`token-status${detailedToggle.checked?" success":""}`;
+  renderLocalAiState(state?.local_ai);
   renderUpdateState(state?.updates);
   basePath.textContent=state?.base_dir||"Not selected";
   openFolderButton.disabled=!state?.base_dir;
@@ -731,18 +844,164 @@ function renderSettingsState(state){
     tokenStatus.textContent=state.credential_error;
     tokenStatus.classList.add("error");
     deleteButton.disabled=true;
-    return;
-  }
-  const vault=state?.credential_vault||"operating system credential vault";
-  if(state?.token_configured){
+  }else if(state?.token_configured&&provider==="custom"){
+    const vault=state?.credential_vault||"operating system credential vault";
     tokenStatus.textContent=`A token is saved securely in ${vault}. Enter a new token only to replace it.`;
     tokenStatus.classList.add("success");
     tokenInput.placeholder="Saved token is hidden";
     deleteButton.disabled=false;
   }else{
+    const vault=state?.credential_vault||"operating system credential vault";
     tokenStatus.textContent=`No token is saved in ${vault}.`;
     tokenInput.placeholder="Enter a token to save";
     deleteButton.disabled=true;
+  }
+}
+
+async function setLocalDetailedAnalysis(){
+  const toggle=document.querySelector("#localDetailedAnalysis");
+  const note=document.querySelector("#localDetailedAnalysisStatus");
+  toggle.disabled=true;
+  note.textContent=toggle.checked?"Enabling private detailed analysis…":"Disabling private detailed analysis…";
+  note.className="token-status";
+  try{
+    const api=await waitForDesktopApi("set_local_detailed_analysis");
+    if(!api)throw new Error("Local detailed analysis is available in the desktop application.");
+    const result=await api.set_local_detailed_analysis(Boolean(toggle.checked));
+    note.textContent=result.local_detailed_analysis
+      ?"Enabled. Survey chat may use a limited set of locally masked comments."
+      :"Off. Survey chat uses anonymised aggregates only.";
+    note.className="token-status success";
+  }catch(error){
+    toggle.checked=!toggle.checked;
+    note.textContent=error.message||String(error);
+    note.className="token-status error";
+  }finally{toggle.disabled=false;}
+}
+
+function readableBytes(value){
+  const bytes=Number(value)||0;
+  if(bytes<1024)return `${bytes} B`;
+  const units=["KB","MB","GB","TB"];
+  let amount=bytes,index=-1;
+  do{amount/=1024;index+=1;}while(amount>=1024&&index<units.length-1);
+  return `${amount.toFixed(index>0?1:0)} ${units[index]}`;
+}
+
+function renderLocalAiState(state){
+  if(!state)return;
+  const select=document.querySelector("#localAiModelSelect");
+  const existing=[...select.options].map(option=>option.value).join("|");
+  const incoming=(state.models||[]).map(model=>model.id).join("|");
+  if(existing!==incoming){
+    select.innerHTML=(state.models||[]).map(model=>`<option value="${esc(model.id)}">${esc(model.name)}</option>`).join("");
+  }
+  select.value=state.selected_model||"";
+  const selected=(state.models||[]).find(model=>model.id===state.selected_model);
+  document.querySelector("#localAiModelDetail").innerHTML=selected?`<strong>${esc(selected.description)}</strong><span>${esc(selected.size)} · ${esc(selected.memory)}</span><small>${selected.installed?"Downloaded; verified before each start":"Not downloaded"} · ${esc(state.runtime_name||"Runtime unavailable")}</small>`:"";
+  const status=document.querySelector("#localAiStatus");
+  status.textContent=state.error||state.message||"Local AI is not running.";
+  status.className=`token-status${state.error?" error":state.running?" success":""}`;
+  if(!state.runtime_available){
+    status.textContent=state.runtime_installing?"Installing the local AI runtime automatically…":state.error||"No local AI runtime is available.";
+    status.className=`token-status${state.runtime_installing?"":" error"}`;
+  }
+  const progress=document.querySelector("#localAiProgress");
+  progress.hidden=!state.downloading;
+  document.querySelector("#localAiProgressBar").value=state.download_percent||0;
+  document.querySelector("#localAiProgressPercent").textContent=`${state.download_percent||0}%`;
+  document.querySelector("#localAiProgressLabel").textContent=`${readableBytes(state.downloaded_bytes)} of ${readableBytes(state.download_total)}`;
+  const primary=document.querySelector("#localAiPrimaryButton");
+  const cancel=document.querySelector("#cancelLocalAiButton");
+  const remove=document.querySelector("#removeLocalAiButton");
+  select.disabled=Boolean(state.downloading||state.starting);
+  primary.disabled=Boolean(state.downloading||state.starting||state.runtime_installing)||!state.runtime_available;
+  primary.textContent=state.runtime_installing?"Installing runtime…":state.downloading?"Downloading…":state.starting?"Starting…":state.running?"Stop local AI":state.selected_installed?"Start & use":"Download & use";
+  cancel.hidden=!state.downloading;
+  remove.hidden=!state.selected_installed||state.running||state.downloading||state.starting;
+}
+
+async function refreshLocalAiState(){
+  const api=await waitForDesktopApi("get_local_ai_state",5000);
+  if(!api)return;
+  try{renderLocalAiState(await api.get_local_ai_state());}
+  catch(error){
+    const status=document.querySelector("#localAiStatus");
+    status.textContent=error.message||String(error);
+    status.className="token-status error";
+  }
+}
+
+async function changeAiProvider(){
+  const provider=document.querySelector("#aiProviderSelect").value;
+  document.querySelector("#managedAiSettings").hidden=provider!=="managed";
+  document.querySelector("#customAiSettings").hidden=provider!=="custom";
+  try{
+    const api=await waitForDesktopApi("set_ai_provider");
+    if(!api)throw new Error("AI settings are available in the desktop application.");
+    renderLocalAiState(await api.set_ai_provider(provider));
+    await loadSettingsState();
+  }catch(error){
+    const status=document.querySelector(provider==="managed"?"#localAiStatus":"#endpointStatus");
+    status.textContent=error.message||String(error);
+    status.className="token-status error";
+  }
+}
+
+async function selectLocalAiModel(){
+  const modelId=document.querySelector("#localAiModelSelect").value;
+  try{
+    const api=await waitForDesktopApi("select_local_ai_model");
+    if(!api)throw new Error("Local AI is available in the desktop application.");
+    renderLocalAiState(await api.select_local_ai_model(modelId));
+  }catch(error){
+    const status=document.querySelector("#localAiStatus");
+    status.textContent=error.message||String(error);
+    status.className="token-status error";
+  }
+}
+
+async function runLocalAiPrimaryAction(){
+  const button=document.querySelector("#localAiPrimaryButton");
+  button.disabled=true;
+  try{
+    const api=await waitForDesktopApi("get_local_ai_state");
+    if(!api)throw new Error("Local AI is available in the desktop application.");
+    const state=await api.get_local_ai_state();
+    let updated;
+    if(state.running)updated=await api.stop_local_ai();
+    else if(state.selected_installed){
+      button.textContent="Starting…";
+      const status=document.querySelector("#localAiStatus");
+      status.textContent="Verifying and loading the model. This can take a minute on CPU…";
+      status.className="token-status";
+      updated=await api.start_local_ai();
+    }
+    else updated=await api.download_local_ai_model();
+    renderLocalAiState(updated);
+  }catch(error){
+    const status=document.querySelector("#localAiStatus");
+    status.textContent=error.message||String(error);
+    status.className="token-status error";
+  }finally{button.disabled=false;}
+}
+
+async function cancelLocalAiDownload(){
+  const api=await waitForDesktopApi("cancel_local_ai_download");
+  if(api)renderLocalAiState(await api.cancel_local_ai_download());
+}
+
+async function removeLocalAiModel(){
+  const modelId=document.querySelector("#localAiModelSelect").value;
+  if(!window.confirm("Remove this downloaded model from this computer?"))return;
+  try{
+    const api=await waitForDesktopApi("remove_local_ai_model");
+    if(!api)throw new Error("Local AI is available in the desktop application.");
+    renderLocalAiState(await api.remove_local_ai_model(modelId));
+  }catch(error){
+    const status=document.querySelector("#localAiStatus");
+    status.textContent=error.message||String(error);
+    status.className="token-status error";
   }
 }
 
@@ -839,6 +1098,8 @@ async function openSettings(){
   DashboardUI.openDialog(document.querySelector("#settingsDialog"));
   document.querySelector("#tokenStatus").textContent="Checking credential status…";
   await loadSettingsState();
+  clearInterval(localAiPollTimer);
+  localAiPollTimer=setInterval(()=>void refreshLocalAiState(),750);
 }
 
 async function saveAiApiEndpoint(){
@@ -1032,6 +1293,12 @@ document.querySelector("#saveEndpointButton").addEventListener("click",()=>void 
 document.querySelector("#testEndpointButton").addEventListener("click",()=>void testAiApiEndpoint());
 document.querySelector("#saveTokenButton").addEventListener("click",()=>void saveOpenAIToken());
 document.querySelector("#deleteTokenButton").addEventListener("click",()=>void deleteOpenAIToken());
+document.querySelector("#aiProviderSelect").addEventListener("change",()=>void changeAiProvider());
+document.querySelector("#localDetailedAnalysis").addEventListener("change",()=>void setLocalDetailedAnalysis());
+document.querySelector("#localAiModelSelect").addEventListener("change",()=>void selectLocalAiModel());
+document.querySelector("#localAiPrimaryButton").addEventListener("click",()=>void runLocalAiPrimaryAction());
+document.querySelector("#cancelLocalAiButton").addEventListener("click",()=>void cancelLocalAiDownload());
+document.querySelector("#removeLocalAiButton").addEventListener("click",()=>void removeLocalAiModel());
 document.querySelector("#openaiTokenInput").addEventListener("keydown",event=>{
   if(event.key==="Enter"){
     event.preventDefault();
@@ -1045,7 +1312,25 @@ document.querySelector("#apiEndpointInput").addEventListener("keydown",event=>{
   }
 });
 document.querySelector("#chartDialog").addEventListener("close",()=>document.querySelector("#expandedChartHost").replaceChildren());
-document.querySelector("#settingsDialog").addEventListener("close",()=>{document.querySelector("#openaiTokenInput").value="";});
+document.querySelector("#settingsDialog").addEventListener("close",()=>{
+  document.querySelector("#openaiTokenInput").value="";
+  clearInterval(localAiPollTimer);
+  localAiPollTimer=null;
+});
+document.addEventListener("click",event=>{
+  const toggle=event.target.closest?.(".monthly-series-toggle[data-plan-year]");
+  if(!toggle||!toggle.closest(".monthly-series-legend"))return;
+  event.preventDefault();
+  const expandedHost=toggle.closest("#expandedChartHost");
+  const label=toggle.dataset.planYear;
+  if(hiddenMonthlyPlanYears.has(label))hiddenMonthlyPlanYears.delete(label);
+  else hiddenMonthlyPlanYears.add(label);
+  renderMonthlyTrend(filtered());
+  if(expandedHost){
+    const clone=cloneExpandedMonthlyTrend();
+    if(clone)expandedHost.replaceChildren(clone);
+  }
+});
 DashboardUI.initialiseDialogs();
 DashboardUI.initialiseTabs(document.querySelector("#reportTabs"),{defaultPanelId:"expenseReportPanel"});
 initialiseChartExpansion();

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Facilities Dashboard</title>
   <link rel="icon" type="image/png" href="app-icon.png">
-  <link rel="stylesheet" href="styles.css?v=32">
+  <link rel="stylesheet" href="styles.css?v=35">
 </head>
 <body>
   <header class="topbar">
@@ -22,10 +22,13 @@
 
   <nav class="report-tabs" id="reportTabs" role="tablist" aria-label="Dashboard reports" hidden>
     <div class="report-tabs-inner">
-      <button class="report-tab" id="expenseReportTab" type="button" role="tab" aria-controls="expenseReportPanel" aria-selected="true" data-tab-target="expenseReportPanel">Expense Report</button>
-      <button class="report-tab" id="surveyReportTab" type="button" role="tab" aria-controls="surveyReportPanel" aria-selected="false" data-tab-target="surveyReportPanel">Survey Report</button>
-      <button class="report-tab" id="workplaceTab" type="button" role="tab" aria-controls="workplacePanel" aria-selected="false" data-tab-target="workplacePanel">Workplace</button>
-      <button class="report-tab" id="collaborationsTab" type="button" role="tab" aria-controls="collaborationsPanel" aria-selected="false" data-tab-target="collaborationsPanel">Collaborations</button>
+      <div class="report-tab-list">
+        <button class="report-tab" id="expenseReportTab" type="button" role="tab" aria-controls="expenseReportPanel" aria-selected="true" data-tab-target="expenseReportPanel">Expense Report</button>
+        <button class="report-tab" id="surveyReportTab" type="button" role="tab" aria-controls="surveyReportPanel" aria-selected="false" data-tab-target="surveyReportPanel">Survey Report</button>
+        <button class="report-tab" id="workplaceTab" type="button" role="tab" aria-controls="workplacePanel" aria-selected="false" data-tab-target="workplacePanel">Workplace</button>
+        <button class="report-tab" id="collaborationsTab" type="button" role="tab" aria-controls="collaborationsPanel" aria-selected="false" data-tab-target="collaborationsPanel">Collaborations</button>
+      </div>
+      <span class="cost-tax-note">All costs include GST.</span>
     </div>
   </nav>
 
@@ -60,7 +63,7 @@
     <section class="bucket-grid" id="bucketCards"></section>
 
     <section class="panel chart-panel monthly-trend-panel">
-      <div class="panel-title"><div><span>Monthly comparison</span><h2>Spend by month and year</h2><p>The timeline extends automatically as new Excel months are added; the dashed line shows the monthly average.</p></div><div class="legend" id="monthlyTrendLegend"></div></div>
+      <div class="panel-title"><div><span>Monthly comparison</span><h2>Spend by month and plan year</h2><p>Compare July–June months across plan years. Dotted lines show each plan year's monthly average; select a legend item to show or hide that year.</p></div><div class="legend monthly-series-legend" id="monthlyTrendLegend"></div></div>
       <div id="monthlyTrendChart" class="chart"></div>
     </section>
 
@@ -193,6 +196,11 @@
         <div id="workplaceAdditionalChart" class="chart"></div>
       </section>
 
+      <section class="panel table-panel workplace-wip-panel">
+        <div class="panel-title"><div><span>Work in progress</span><h2>Workplace activity tracker</h2><p>Activities loaded from the <strong>TS-WIP</strong> sheet. Days taken is calculated only for completed activities.</p></div><div id="workplaceWipRowCount"></div></div>
+        <div class="table-scroll"><table><thead><tr><th>Reported Date</th><th>Closed Date</th><th>Activity</th><th>Status</th><th>Comments</th><th class="numeric">Days Taken</th></tr></thead><tbody id="workplaceWipRows"></tbody></table></div>
+      </section>
+
       <section class="panel table-panel workplace-table-panel">
         <div class="panel-title"><div><span>Audit trail</span><h2>Workplace invoice detail</h2><p>All recognised invoices for the selected financial year.</p></div><div id="workplaceRowCount"></div></div>
         <div class="table-scroll"><table><thead><tr><th>Invoice Number</th><th>Date</th><th>Period</th><th>Description</th><th>Cost type</th><th class="numeric">Amount</th></tr></thead><tbody id="workplaceDetailRows"></tbody></table></div>
@@ -263,26 +271,59 @@
       </section>
       <section class="settings-section">
         <div>
-          <h3>AI connection</h3>
-          <p>The endpoint is stored with other application preferences. The token remains separately protected in your operating system credential vault.</p>
+          <h3>AI assistant</h3>
+          <p>Use a private model on this computer, or connect to another OpenAI-compatible endpoint.</p>
         </div>
-        <label class="token-field" for="apiEndpointInput">
-          OpenAI-compatible API endpoint
-          <input id="apiEndpointInput" type="url" autocomplete="off" spellcheck="false" value="http://127.0.0.1:12345/v1" placeholder="http://127.0.0.1:12345/v1">
+        <label class="token-field" for="aiProviderSelect">
+          Connection mode
+          <select id="aiProviderSelect">
+            <option value="managed">Local model managed by this app</option>
+            <option value="custom">Custom OpenAI-compatible endpoint</option>
+          </select>
         </label>
-        <p class="token-status" id="endpointStatus" role="status" aria-live="polite"></p>
-        <div class="settings-actions">
-          <button class="button settings-primary" id="saveEndpointButton" type="button">Save endpoint</button>
-          <button class="button settings-secondary" id="testEndpointButton" type="button">Test endpoint</button>
+        <div class="managed-ai-settings" id="managedAiSettings">
+          <label class="token-field" for="localAiModelSelect">
+            Local model
+            <select id="localAiModelSelect"></select>
+          </label>
+          <div class="local-ai-model-detail" id="localAiModelDetail"></div>
+          <div class="local-ai-progress" id="localAiProgress" hidden>
+            <div><span id="localAiProgressLabel">Preparing download…</span><b id="localAiProgressPercent">0%</b></div>
+            <progress id="localAiProgressBar" max="100" value="0"></progress>
+          </div>
+          <p class="token-status" id="localAiStatus" role="status" aria-live="polite">Checking local AI…</p>
+          <div class="settings-actions">
+            <button class="button settings-primary" id="localAiPrimaryButton" type="button">Download &amp; use</button>
+            <button class="button settings-secondary" id="cancelLocalAiButton" type="button" hidden>Pause download</button>
+            <button class="button settings-danger" id="removeLocalAiButton" type="button" hidden>Remove model</button>
+          </div>
+          <p class="settings-fine-print">Models are downloaded only when requested and stored outside the application. Downloads can be resumed and are verified before use. On Windows this runs CPU-first; on Apple silicon it uses Metal acceleration.</p>
+          <label class="local-detail-toggle" for="localDetailedAnalysis">
+            <input id="localDetailedAnalysis" type="checkbox">
+            <span><strong>Local detailed analysis</strong><small>Allow Survey chat to use a limited set of locally masked comments. Identity columns are never loaded, and this mode is never used with a custom endpoint.</small></span>
+          </label>
+          <p class="token-status" id="localDetailedAnalysisStatus" role="status" aria-live="polite">Off. Survey chat uses anonymised aggregates only.</p>
         </div>
-        <label class="token-field" for="openaiTokenInput">
-          AI API token
-          <input id="openaiTokenInput" type="password" autocomplete="new-password" spellcheck="false" placeholder="Enter a token to save">
-        </label>
-        <p class="token-status" id="tokenStatus" role="status" aria-live="polite">Checking credential status…</p>
-        <div class="settings-actions">
-          <button class="button settings-primary" id="saveTokenButton" type="button">Save token</button>
-          <button class="button settings-danger" id="deleteTokenButton" type="button">Remove saved token</button>
+        <div class="custom-ai-settings" id="customAiSettings" hidden>
+          <label class="token-field" for="apiEndpointInput">
+            OpenAI-compatible API endpoint
+            <input id="apiEndpointInput" type="url" autocomplete="off" spellcheck="false" value="http://127.0.0.1:12345/v1" placeholder="http://127.0.0.1:12345/v1">
+          </label>
+          <p class="token-status" id="endpointStatus" role="status" aria-live="polite"></p>
+          <div class="settings-actions">
+            <button class="button settings-primary" id="saveEndpointButton" type="button">Save endpoint</button>
+            <button class="button settings-secondary" id="testEndpointButton" type="button">Test endpoint</button>
+          </div>
+          <label class="token-field" for="openaiTokenInput">
+            AI API token
+            <input id="openaiTokenInput" type="password" autocomplete="new-password" spellcheck="false" placeholder="Enter a token to save">
+          </label>
+          <p class="token-status" id="tokenStatus" role="status" aria-live="polite">Checking credential status…</p>
+          <div class="settings-actions">
+            <button class="button settings-primary" id="saveTokenButton" type="button">Save token</button>
+            <button class="button settings-danger" id="deleteTokenButton" type="button">Remove saved token</button>
+          </div>
+          <p class="settings-fine-print">The endpoint is stored with other preferences. The masked token is stored separately in your operating system credential vault.</p>
         </div>
       </section>
     </div>
@@ -305,7 +346,7 @@
         <button class="button settings-primary" id="chatOpenSettingsButton" type="button">Open Settings</button>
       </section>
       <div id="chatAvailable">
-        <p class="chat-privacy">Ask Dashboard provides only anonymised aggregates to AI. The separate Survey Summarize action sends masked comment text only after confirmation; identity columns and raw response rows are never included. Avoid entering personal information in chat.</p>
+        <p class="chat-privacy" id="chatPrivacyNotice">Ask Dashboard is restricted to anonymised aggregates from the active tab. It cannot search the web or combine data across tabs. The separate Survey Summarize action sends masked comment text only after confirmation; identity columns and raw response rows are never included.</p>
         <div class="chat-messages" id="chatMessages" aria-live="polite"></div>
         <div class="chat-suggestions" id="chatSuggestions"></div>
         <form class="chat-form" id="chatForm">
@@ -328,10 +369,10 @@
   <footer class="site-footer">Made with <span aria-label="love">❤️</span> by Facilities Team (Anju and Suman) <span aria-label="sparkles">✨</span></footer>
   <script src="components.js?v=1"></script>
   <script src="audit_reports.js?v=1"></script>
-  <script src="survey.js?v=10"></script>
-  <script src="workplace.js?v=4"></script>
+  <script src="survey.js?v=12"></script>
+  <script src="workplace.js?v=5"></script>
   <script src="collaborations.js?v=3"></script>
-  <script src="chat.js?v=6"></script>
-  <script src="dashboard.js?v=29"></script>
+  <script src="chat.js?v=11"></script>
+  <script src="dashboard.js?v=39"></script>
 </body>
 </html>

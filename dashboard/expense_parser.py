@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
-from openpyxl import load_workbook
+from workbook_io import load_workbook_snapshot
 
 
 MONTH_FORMATS = (
@@ -427,26 +427,29 @@ def _finalize(records: list[dict[str, Any]], conflicts: list[dict[str, Any]], so
 
 
 def load_expenses(source: str | Path | bytes | BytesIO) -> dict[str, Any]:
-    workbook = load_workbook(source, data_only=True, read_only=False)
-    normalized = _parse_normalized(workbook)
-    if normalized is not None:
-        records, conflicts = normalized
-        return _finalize(records, conflicts, "normalized")
+    workbook = load_workbook_snapshot(source, data_only=True, read_only=False)
+    try:
+        normalized = _parse_normalized(workbook)
+        if normalized is not None:
+            records, conflicts = normalized
+            return _finalize(records, conflicts, "normalized")
 
-    reorganized = _parse_reorganized(workbook)
-    if reorganized is not None:
-        records, conflicts = reorganized
-        return _finalize(records, conflicts, "reorganized")
+        reorganized = _parse_reorganized(workbook)
+        if reorganized is not None:
+            records, conflicts = reorganized
+            return _finalize(records, conflicts, "reorganized")
 
-    lunch_rows = _parse_lunch(workbook["Lunch"]) if "Lunch" in workbook.sheetnames else []
-    hints: dict[str, int] = {}
-    for record in lunch_rows:
-        parsed = date.fromisoformat(record["month"])
-        hints[parsed.strftime("%b")] = parsed.year
-    pantry_rows = (
-        _parse_pantry(workbook["Pantry & Misc"], hints)
-        if "Pantry & Misc" in workbook.sheetnames
-        else []
-    )
-    records, conflicts = _dedupe([*lunch_rows, *pantry_rows])
-    return _finalize(records, conflicts, "legacy")
+        lunch_rows = _parse_lunch(workbook["Lunch"]) if "Lunch" in workbook.sheetnames else []
+        hints: dict[str, int] = {}
+        for record in lunch_rows:
+            parsed = date.fromisoformat(record["month"])
+            hints[parsed.strftime("%b")] = parsed.year
+        pantry_rows = (
+            _parse_pantry(workbook["Pantry & Misc"], hints)
+            if "Pantry & Misc" in workbook.sheetnames
+            else []
+        )
+        records, conflicts = _dedupe([*lunch_rows, *pantry_rows])
+        return _finalize(records, conflicts, "legacy")
+    finally:
+        workbook.close()

@@ -12,6 +12,8 @@ Double-click `Start Expense Dashboard.command`, or run:
 ./Start\ Expense\ Dashboard.command
 ```
 
+The launcher installs Homebrew's prebuilt `llama.cpp` server when a local AI runtime is not already available, avoiding a source compilation on the normal path. It uses a Python/Metal build only as a fallback. A local-AI installation failure does not prevent the dashboard itself from opening.
+
 ### Windows
 
 For normal use, download `facilities_dashboard.exe` from the latest GitHub Release and double-click it. It is a portable x64 application that bundles Python, the application dependencies, and the Qt renderer.
@@ -56,7 +58,11 @@ The app remembers both the base directory and the last selected workbook. Settin
 
 Use **Settings** to change the base location or open `<base_dir>` in Finder or Explorer. **Refresh** remains in the main header for use after adding or saving a workbook and reloads both data folders. Workbook changes are also checked every 60 seconds while the app is visible.
 
-The optional OpenAI-compatible API endpoint in Settings is stored in `settings.json` with the other application preferences and defaults to `http://127.0.0.1:12345/v1`. The masked AI API token is stored separately in Windows Credential Manager on Windows or Keychain on macOS; it is never returned to the dashboard interface or written to `settings.json`. **Test endpoint** validates the saved token, discovers compatible models, and performs a small completion. Ask Dashboard sends only allowlisted aggregate calculations and never raw rows or survey comments. Name, email, ID and other identity columns are not extracted into application records. The Survey Report separately reads only explicitly recognised comment/feedback columns, masks contact details, explicit identifiers and recognisable personal-name patterns locally, and sends those comments to the configured AI endpoint only after the user confirms **Summarize**. Collaboration Activity, Timeline, Outcome, source information, audit-report filenames, and individual rows are excluded from AI requests. Survey groups with fewer than five responses are suppressed in Ask Dashboard, and chat history is held only for the current app session.
+Settings can use a model managed by the app or a custom OpenAI-compatible endpoint. Managed model weights are not packaged in the executable: the user chooses Fast, Balanced, or Quality, and the app downloads and SHA-256 verifies the corresponding GGUF files. Downloads can be paused and resumed. Models are stored in `%LOCALAPPDATA%\Facility Expense Dashboard\models` on Windows and `~/Library/Application Support/Facility Expense Dashboard/models` on macOS. Windows uses CPU inference by default for broad compatibility; Apple silicon uses Metal. A random token for the private loopback model server is kept in Windows Credential Manager or macOS Keychain.
+
+In custom mode, the endpoint is stored in `settings.json` and defaults to `http://127.0.0.1:12345/v1`. The masked API token is stored separately in the operating-system credential vault; it is never returned to the dashboard interface or written to `settings.json`. **Test endpoint** validates the token, discovers compatible models, and performs a small completion. Ask Dashboard sends only allowlisted aggregate calculations and never raw rows or survey comments. Name, email, ID and other identity columns are not extracted into application records. The Survey Report separately reads only explicitly recognised comment/feedback columns, masks contact details, explicit identifiers and recognisable personal-name patterns locally, and sends those comments to the active AI endpoint only after the user confirms **Summarize**. Collaboration Activity, Timeline, Outcome, source information, audit-report filenames, and individual rows are excluded from AI requests. Survey groups with fewer than five responses are suppressed in Ask Dashboard, and chat history is held only for the current app session.
+
+Ask Dashboard is locked to the active tab. Cross-tab and general external-search requests are rejected locally, and the AI receives no arbitrary web-search tool. The Expense Report has one narrowly allowlisted external-facts path: its forecast tool reads dated India/Karnataka public-holiday facts from the Nager.Date API, derives working days and long weekends locally, and displays the source with the answer. Forecast values are calculated by the application from monthly average attendance, monthly average per-person cost and average fixed cost; the model cannot replace those values. If verified facts are unavailable, no calendar adjustment is made. Analytical responses are accepted only after an allowlisted aggregate tool has been used. Requested ad-hoc charts are rendered locally from a constrained aggregate-only chart specification; no model-generated HTML, JavaScript, or executable chart code is accepted.
 
 ## Survey workbooks
 
@@ -77,6 +83,8 @@ Collaboration Plan Years run from 1 July through 30 June: PY26 means 1 July 2026
 ## Audit reports
 
 The Expense Report uses an 80/20 audit area: expense detail on the left and a scrollable report-file panel on the right. Put reports below a recognised month folder such as `audit_reports/Oct2026/`; subfolders inside that month are supported. Only the Expense **Through month** filter applies. Double-click a file to open it outside the dashboard. Report contents are never parsed, indexed, served to the browser, or sent to Ask Dashboard.
+
+For a OneDrive-backed base directory, use **Always keep on this device** and wait for the green check mark. Workbook readers retry transient access failures, parse an in-memory byte snapshot, and close every Excel handle. A failed background refresh keeps the last good Expense or Collaboration payload visible and shows an actionable sync/lock message.
 
 ## Workplace workbooks and contracts
 

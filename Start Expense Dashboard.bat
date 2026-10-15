@@ -14,7 +14,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 .venv\Scripts\python.exe -c "import keyring, openai, openpyxl, webview" >nul 2>nul
 if errorlevel 1 (
-  echo Installing desktop application dependencies ^(first launch only^)...
+  echo Installing dashboard dependencies ^(first launch only^)...
   set PIP_DISABLE_PIP_VERSION_CHECK=1
   .venv\Scripts\python.exe -m pip install --prefer-binary -r dashboard\requirements.txt
   if errorlevel 1 (
@@ -22,6 +22,18 @@ if errorlevel 1 (
     echo The dependencies could not be installed. Check your internet or proxy connection and try again.
     pause
     exit /b 1
+  )
+)
+
+.venv\Scripts\python.exe -c "import llama_cpp" >nul 2>nul
+if errorlevel 1 (
+  echo Installing the optional local AI runtime ^(first launch only^)...
+  .venv\Scripts\python.exe -m pip install "llama-cpp-python==0.3.16" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+  if errorlevel 1 (
+    echo.
+    echo Warning: the optional local AI runtime could not be installed.
+    echo The dashboard will still start; custom OpenAI-compatible endpoints remain available.
+    echo.
   )
 )
 

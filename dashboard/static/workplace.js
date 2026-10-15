@@ -1,7 +1,7 @@
 (function initialiseWorkplaceDashboard(global){
   const COLORS={rental:"#087f52",variable:"#f2a93b",accent:"#2f80ed",danger:"#d9485f"};
   const ICONS={pdf:"📕",word:"📘",excel:"📊",presentation:"📙",image:"🖼️",text:"📄",file:"📁"};
-  let payload={records:[],contracts:[],forecast:{},meta:{}};
+  let payload={records:[],wip_records:[],contracts:[],forecast:{},meta:{}};
 
   const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
   const monthLabel=iso=>new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN",{month:"short",year:"numeric"});
@@ -23,6 +23,8 @@
     document.querySelector("#workplaceTrendLegend").replaceChildren();
     document.querySelector("#workplaceDetailRows").innerHTML='<tr><td colspan="6" class="table-empty">No workplace invoices found</td></tr>';
     document.querySelector("#workplaceRowCount").textContent="";
+    document.querySelector("#workplaceWipRows").innerHTML='<tr><td colspan="6" class="table-empty">No TS-WIP activities found</td></tr>';
+    document.querySelector("#workplaceWipRowCount").textContent="";
     renderContracts();
     renderForecast();
   }
@@ -40,7 +42,8 @@
     const records=fiscalYear==="all"?payload.records:payload.records.filter(row=>row.fiscal_year===fiscalYear);
     const months=[...new Set(records.map(row=>row.month))].sort();
     const fiscalMeta=(payload.meta?.fiscal_years||[]).find(item=>item.label===fiscalYear);
-    return {fiscalYear,records,months,fiscalMeta};
+    const wipRecords=fiscalYear==="all"?(payload.wip_records||[]):(payload.wip_records||[]).filter(row=>row.fiscal_year===fiscalYear);
+    return {fiscalYear,records,wipRecords,months,fiscalMeta};
   }
 
   function renderForecast(){
@@ -129,6 +132,19 @@
     document.querySelector("#workplaceDetailRows").innerHTML=rows.length?rows.map(row=>`<tr><td><b>${escapeHtml(row.invoice_number)}</b></td><td>${escapeHtml(shortDate(row.date))}</td><td>${escapeHtml(row.period)}</td><td class="workplace-description-cell">${escapeHtml(row.description)}</td><td>${escapeHtml(row.cost_type)}</td><td class="numeric">${escapeHtml(money(row.amount_inr))}</td></tr>`).join(""):'<tr><td colspan="6" class="table-empty">No workplace invoices found for this selection</td></tr>';
   }
 
+  function renderWipTable(view){
+    const rows=[...(view.wipRecords||[])].sort((a,b)=>b.reported_date.localeCompare(a.reported_date)||a.activity.localeCompare(b.activity));
+    document.querySelector("#workplaceWipRowCount").textContent=`${rows.length} activit${rows.length===1?"y":"ies"}`;
+    document.querySelector("#workplaceWipRows").innerHTML=rows.length?rows.map(row=>{
+      const statusKey=String(row.status||"").trim().toLowerCase();
+      const statusClass=statusKey==="completed"?"completed":statusKey==="in progress"?"in-progress":statusKey==="not started"?"not-started":"other";
+      const days=statusKey==="completed"&&Number.isFinite(Number(row.days_taken))?String(Number(row.days_taken)):"";
+      const activity=String(row.activity||"");
+      const comments=String(row.comments||"");
+      return `<tr><td>${escapeHtml(shortDate(row.reported_date))}</td><td>${row.closed_date?escapeHtml(shortDate(row.closed_date)):""}</td><td class="workplace-wip-text"><span title="${escapeHtml(activity)}">${escapeHtml(activity)}</span></td><td><span class="workplace-status-chip ${statusClass}">${escapeHtml(row.status)}</span></td><td class="workplace-wip-text"><span title="${escapeHtml(comments)}">${escapeHtml(comments||"—")}</span></td><td class="numeric">${escapeHtml(days)}</td></tr>`;
+    }).join(""):'<tr><td colspan="6" class="table-empty">No TS-WIP activities found for this selection</td></tr>';
+  }
+
   async function openContract(identifier){
     const status=document.querySelector("#workplaceStatus");
     try{
@@ -147,12 +163,21 @@
   }
 
   function render(){
-    if(!payload.records?.length){clear("No recognised workplace workbooks were found under the workplace folder.");return;}
+    if(!payload.records?.length){
+      clear("No recognised workplace cost rows were found under the workplace folder.");
+      const view=currentView();
+      renderWipTable(view);
+      if(view.wipRecords.length){
+        document.querySelector("#workplaceStatus").textContent=`Loaded ${view.wipRecords.length} TS-WIP activit${view.wipRecords.length===1?"y":"ies"}; no workplace cost rows were found.`;
+      }
+      return;
+    }
     const view=currentView();
     renderForecast();
     renderKpis(view);
     renderTrend(view);
     renderAdditional(view);
+    renderWipTable(view);
     renderTable(view);
     renderContracts();
     const warnings=[];
@@ -174,7 +199,7 @@
       render();
       return payload;
     }catch(error){
-      payload={records:[],contracts:[],forecast:{},meta:{}};
+      payload={records:[],wip_records:[],contracts:[],forecast:{},meta:{}};
       clear(error.message||String(error));
       return payload;
     }

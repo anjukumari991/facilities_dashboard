@@ -9,6 +9,7 @@ from keyring.errors import KeyringError, PasswordDeleteError
 
 SERVICE_NAME = "Facilities Dashboard"
 OPENAI_TOKEN_ACCOUNT = "OpenAI API token"
+LOCAL_AI_TOKEN_ACCOUNT = "Managed local AI token"
 
 
 class SecureCredentialStore:
@@ -52,3 +53,20 @@ class SecureCredentialStore:
             return True
         except (PasswordDeleteError, KeyringError) as exc:
             raise RuntimeError(f"Could not remove the token from {self.vault_name}.") from exc
+
+    def get_local_ai_token(self) -> str | None:
+        try:
+            return keyring.get_password(SERVICE_NAME, LOCAL_AI_TOKEN_ACCOUNT)
+        except KeyringError as exc:
+            raise RuntimeError(f"Could not access {self.vault_name}.") from exc
+
+    def set_local_ai_token(self, token: str) -> None:
+        normalized = token.strip()
+        if not normalized:
+            raise ValueError("The local AI token cannot be empty.")
+        try:
+            keyring.set_password(SERVICE_NAME, LOCAL_AI_TOKEN_ACCOUNT, normalized)
+            if keyring.get_password(SERVICE_NAME, LOCAL_AI_TOKEN_ACCOUNT) != normalized:
+                raise RuntimeError(f"{self.vault_name} did not retain the local AI token.")
+        except KeyringError as exc:
+            raise RuntimeError(f"Could not save the local AI token in {self.vault_name}.") from exc

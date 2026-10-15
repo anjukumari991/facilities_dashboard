@@ -261,7 +261,16 @@
     try{
       const response=await fetch("/api/collaborations",{cache:"no-store"});
       const result=await response.json();
-      if(!response.ok||result.error)throw new Error(result.error||"Collaboration data could not be loaded.");
+      if(!response.ok)throw new Error(result.error||"Collaboration data could not be loaded.");
+      if(result.error&&result.meta?.record_count){
+        payload=result;
+        assignTeamColors();
+        populateFilters();
+        render();
+        document.querySelector("#collaborationStatus").textContent=`Showing the last successfully loaded collaboration data. ${result.error}`;
+        return payload;
+      }
+      if(result.error)throw new Error(result.error);
       payload=result;
       assignTeamColors();
       populateFilters();

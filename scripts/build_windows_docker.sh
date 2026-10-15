@@ -5,6 +5,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE_NAME="facilities-dashboard-windows-builder:local"
 OUTPUT_DIR="$REPO_DIR/dist/windows-docker"
+APP_VERSION="${1:-0.0.0-dev+local}"
 CONTAINER_ID=""
 
 cleanup() {
@@ -22,6 +23,7 @@ fi
 print "Building Windows x64 executable under Wine. This can take several minutes on Apple Silicon."
 docker build \
   --platform linux/amd64 \
+  --build-arg "APP_VERSION=$APP_VERSION" \
   --file "$REPO_DIR/packaging/windows/Dockerfile.windows" \
   --tag "$IMAGE_NAME" \
   "$REPO_DIR"
