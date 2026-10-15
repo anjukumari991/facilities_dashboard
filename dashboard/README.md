@@ -22,6 +22,14 @@ For later versions, open **Settings** and click **Check for updates**. A newer s
 
 To run from source instead, double-click `Start Expense Dashboard.bat`.
 
+To build the single-file Windows executable locally without Docker, install Python 3.12 x64 and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_local.ps1 -Version 1.2.1
+```
+
+The executable and checksum are written to `dist\windows-local`.
+
 The source launcher creates a Python virtual environment when required, installs the dependencies, and opens the dashboard in a native desktop window. Python 3.10 or newer is required only when running from source. The released executable does not require Python or WebView2 to be installed.
 
 ## First launch and file layout

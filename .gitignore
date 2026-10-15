@@ -1,5 +1,6 @@
 # Python and desktop build artifacts
 .venv/
+.venv-windows-build/
 __pycache__/
 *.py[cod]
 *.egg-info/
