@@ -3,6 +3,8 @@ FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PYTHON_VERSION=3.12.9
 ARG APP_VERSION=0.0.0-dev+local
+ARG LLAMA_RUNTIME_TAG=b11429
+ARG LLAMA_RUNTIME_SHA256=1283323272b04cd07905816a597a0da810918102de958f4ff6f7bbaa70ed2efe
 
 ENV WINEARCH=win64 \
     WINEPREFIX=/opt/wine-prefix \
@@ -14,6 +16,7 @@ RUN dpkg --add-architecture i386 \
         ca-certificates \
         cabextract \
         wget \
+        unzip \
         wine \
         wine32 \
         wine64 \
@@ -25,41 +28,40 @@ RUN xvfb-run -a sh -c '\
         winecfg -v win10; \
         wineserver -w'
 
-RUN wget -q "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-amd64.exe" -O /tmp/python-installer.exe \
-    && installer_status=0 \
-    && xvfb-run -a wine /tmp/python-installer.exe /quiet \
-        InstallAllUsers=0 \
-        Include_launcher=0 \
-        Include_test=0 \
-        PrependPath=0 \
-        TargetDir=C:\\Python312 \
-        /log C:\\python-install.log \
-        || installer_status=$?; \
-    if [ "${installer_status}" -ne 0 ]; then \
-        cat "${WINEPREFIX}/drive_c/python-install.log" 2>/dev/null || true; \
-        exit "${installer_status}"; \
-    fi; \
-    rm /tmp/python-installer.exe; \
-    test -f "${WINEPREFIX}/drive_c/Python312/python.exe"; \
-    xvfb-run -a wine 'C:\Python312\python.exe' --version
+RUN wget -q "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip" -O /tmp/python-embed.zip \
+    && mkdir -p "${WINEPREFIX}/drive_c/Python312/Lib/site-packages" \
+    && unzip -q /tmp/python-embed.zip -d "${WINEPREFIX}/drive_c/Python312" \
+    && sed -i 's/^#import site/import site/' "${WINEPREFIX}/drive_c/Python312/python312._pth" \
+    && wget -q "https://bootstrap.pypa.io/get-pip.py" -O /tmp/get-pip.py \
+    && timeout --signal=TERM 600s xvfb-run -a wine 'C:\Python312\python.exe' 'Z:\tmp\get-pip.py' --disable-pip-version-check \
+    && rm /tmp/python-embed.zip /tmp/get-pip.py \
+    && test -f "${WINEPREFIX}/drive_c/Python312/python.exe" \
+    && xvfb-run -a wine 'C:\Python312\python.exe' --version \
+    && xvfb-run -a wine 'C:\Python312\python.exe' -m pip --version
 
 COPY dashboard/requirements.txt /tmp/facilities-requirements.txt
-COPY dashboard/requirements-local-ai.txt /tmp/facilities-requirements-local-ai.txt
-
 RUN xvfb-run -a wine 'C:\Python312\python.exe' -m pip install --upgrade pip \
-    && xvfb-run -a wine 'C:\Python312\python.exe' -m pip install \
-        -r 'Z:\tmp\facilities-requirements-local-ai.txt' \
-        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
     && xvfb-run -a wine 'C:\Python312\python.exe' -m pip install \
         -r 'Z:\tmp\facilities-requirements.txt' \
         pyinstaller \
         pillow
+
+RUN wget -q "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_RUNTIME_TAG}/llama-${LLAMA_RUNTIME_TAG}-bin-win-cpu-x64.zip" -O /tmp/llama-runtime.zip \
+    && echo "${LLAMA_RUNTIME_SHA256}  /tmp/llama-runtime.zip" | sha256sum --check --strict \
+    && mkdir -p /tmp/llama-runtime-extracted /opt/llama-runtime \
+    && unzip -q /tmp/llama-runtime.zip -d /tmp/llama-runtime-extracted \
+    && server_path="$(find /tmp/llama-runtime-extracted -type f -name llama-server.exe -print -quit)" \
+    && test -n "${server_path}" \
+    && cp -a "$(dirname "${server_path}")"/. /opt/llama-runtime/ \
+    && rm -rf /tmp/llama-runtime.zip /tmp/llama-runtime-extracted
 
 WORKDIR /workspace
 COPY dashboard/ ./dashboard/
 COPY tests/ ./tests/
 
 RUN printf 'APP_VERSION = "%s"\n' "${APP_VERSION}" > dashboard/_build_version.py
+RUN mkdir -p build/llama-runtime-bundle \
+    && cp -a /opt/llama-runtime/. build/llama-runtime-bundle/
 
 RUN xvfb-run -a wine 'C:\Python312\python.exe' -m unittest discover -s tests -v
 
@@ -77,7 +79,8 @@ RUN xvfb-run -a wine 'C:\Python312\python.exe' -m PyInstaller \
         --collect-data webview \
         --collect-all keyring \
         --collect-all openai \
-        --collect-all llama_cpp \
+        --add-binary 'build/llama-runtime-bundle/llama-server.exe;bin' \
+        --add-binary 'build/llama-runtime-bundle/*.dll;bin' \
         --hidden-import webview.platforms.qt \
         dashboard/desktop_app.py \
     && cd dist \

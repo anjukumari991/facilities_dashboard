@@ -178,10 +178,13 @@ class LocalAIManager:
             Path("/opt/homebrew/bin/llama-server"),
             Path("/usr/local/bin/llama-server"),
         ]
-        # A future standalone macOS package can place the native runtime beside
-        # the app resources without changing the dashboard code.
+        # Packaged applications place the native runtime in a bin directory.
+        # PyInstaller exposes bundled files under _MEIPASS, while the macOS
+        # bundle keeps them under Contents/Resources/bin.
         if getattr(sys, "frozen", False):
-            candidates.insert(0, Path(__file__).resolve().parents[2] / "bin" / "llama-server")
+            frozen_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+            candidates.insert(0, frozen_root / "bin" / ("llama-server.exe" if os.name == "nt" else "llama-server"))
+            candidates.insert(1, Path(__file__).resolve().parents[2] / "bin" / "llama-server")
         for candidate in candidates:
             if Path(candidate).is_file() and os.access(candidate, os.X_OK):
                 return str(candidate)

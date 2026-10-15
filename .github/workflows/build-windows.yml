@@ -56,16 +56,37 @@ jobs:
           python-version: "3.12"
           architecture: x64
           cache: pip
-          cache-dependency-path: |
-            dashboard/requirements.txt
-            dashboard/requirements-local-ai.txt
+          cache-dependency-path: dashboard/requirements.txt
 
       - name: Install dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r dashboard/requirements-local-ai.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
           python -m pip install -r dashboard/requirements.txt pyinstaller pillow
+
+      - name: Download pinned Windows local AI runtime
+        shell: pwsh
+        env:
+          LLAMA_RUNTIME_URL: https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-win-cpu-x64.zip
+          LLAMA_RUNTIME_SHA256: 1283323272b04cd07905816a597a0da810918102de958f4ff6f7bbaa70ed2efe
+        run: |
+          $archive = "build/llama-runtime.zip"
+          $extractDirectory = "build/llama-runtime-extracted"
+          $bundleDirectory = "build/llama-runtime-bundle"
+          New-Item -ItemType Directory -Force "build" | Out-Null
+          Invoke-WebRequest -Uri $env:LLAMA_RUNTIME_URL -OutFile $archive
+          $actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:LLAMA_RUNTIME_SHA256) {
+            throw "The llama.cpp runtime checksum did not match the pinned release."
+          }
+          Expand-Archive -Path $archive -DestinationPath $extractDirectory -Force
+          $server = Get-ChildItem $extractDirectory -Recurse -Filter "llama-server.exe" | Select-Object -First 1
+          if (-not $server) {
+            throw "The pinned llama.cpp archive does not contain llama-server.exe."
+          }
+          New-Item -ItemType Directory -Force $bundleDirectory | Out-Null
+          Copy-Item -Path (Join-Path $server.Directory.FullName "*") -Destination $bundleDirectory -Recurse -Force
+          & "$bundleDirectory/llama-server.exe" --version
 
       - name: Run updater tests
         shell: pwsh
@@ -91,7 +112,8 @@ jobs:
             --collect-data webview `
             --collect-all keyring `
             --collect-all openai `
-            --collect-all llama_cpp `
+            --add-binary "build/llama-runtime-bundle/llama-server.exe;bin" `
+            --add-binary "build/llama-runtime-bundle/*.dll;bin" `
             --hidden-import webview.platforms.qt `
             dashboard/desktop_app.py
 
