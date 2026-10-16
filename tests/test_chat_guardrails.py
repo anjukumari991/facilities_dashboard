@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import sys
 import threading
 import unittest
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +61,29 @@ class ChatGuardrailTests(unittest.TestCase):
     @staticmethod
     def _credentials() -> SimpleNamespace:
         return SimpleNamespace(get_openai_api_token=lambda: "test-token")
+
+    def test_missing_openai_sdk_uses_dependency_free_compatible_client(self) -> None:
+        service = DashboardChatService(self._state(), self._credentials())
+
+        with patch.dict(sys.modules, {"openai": None}):
+            client = service._client("local-token", "http://127.0.0.1:12481/v1")
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def read():
+                return b'{"object":"list","data":[{"id":"local-model"}]}'
+
+        with patch("chat_service.urlopen", return_value=Response()) as request:
+            models = client.models.list()
+
+        self.assertEqual(models.data[0].id, "local-model")
+        self.assertEqual(request.call_args.args[0].full_url, "http://127.0.0.1:12481/v1/models")
 
     def test_cross_tab_question_is_refused_before_model_call(self) -> None:
         called = False

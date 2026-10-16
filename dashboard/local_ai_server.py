@@ -16,10 +16,12 @@ def run_local_ai_server(model_path: str, model_id: str, port: int, api_key: str)
         raise RuntimeError("The local AI runtime is not installed.") from exc
 
     gpu_layers = -1 if os.sys.platform == "darwin" else 0
-    threads = max(2, min(12, (os.cpu_count() or 4) - 1))
+    max_threads = 8 if os.sys.platform == "win32" else 12
+    threads = max(2, min(max_threads, (os.cpu_count() or 4) - 1))
+    context_size = 8_192 if os.sys.platform == "win32" or model_id == "qwen2.5-1.5b-q4" else 16_384
     llm = Llama(
         model_path=str(Path(model_path).resolve()),
-        n_ctx=16_384,
+        n_ctx=context_size,
         n_threads=threads,
         n_threads_batch=threads,
         n_gpu_layers=gpu_layers,

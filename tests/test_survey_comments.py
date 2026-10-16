@@ -218,6 +218,53 @@ class SurveyCommentParserTests(unittest.TestCase):
 
 
 class SurveyCommentSummaryTests(unittest.TestCase):
+    def test_local_summary_batches_large_comment_sets(self) -> None:
+        requests: list[dict] = []
+
+        class Models:
+            def list(self):
+                return SimpleNamespace(data=[SimpleNamespace(id="qwen-local")])
+
+        class Completions:
+            def create(self, **request):
+                requests.append(request)
+                content = json.dumps(
+                    {
+                        "appreciations": [{"point": "Clean facilities", "mentions": 1}],
+                        "employee_asks": [{"point": "Improve lunch variety", "mentions": 1}],
+                    }
+                )
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+        client = SimpleNamespace(models=Models(), chat=SimpleNamespace(completions=Completions()))
+        settings = SimpleNamespace(load=lambda: {"ai_provider": "managed"})
+        comments = [
+            {"topic": "Feedback", "text": f"Comment {index}: " + ("Facilities feedback. " * 20)}
+            for index in range(80)
+        ]
+        state = SimpleNamespace(
+            lock=threading.RLock(),
+            library=SimpleNamespace(settings=settings),
+            survey_payload={"periods": [{"month": "2026-10-01", "comments": comments}]},
+        )
+        credentials = SimpleNamespace(
+            get_openai_api_token=lambda: "external-token",
+            get_local_ai_token=lambda: "local-token",
+        )
+        service = DashboardChatService(
+            state,
+            credentials,
+            managed_endpoint=lambda: "http://127.0.0.1:12499/v1",
+            client_factory=lambda *_args: client,
+        )
+
+        result = service.summarize_survey_comments("2026-10-01")
+
+        self.assertTrue(result["ok"])
+        self.assertGreater(result["batches"], 1)
+        self.assertEqual(len(requests), result["batches"] + 1)
+        self.assertTrue(all(request["max_tokens"] <= 800 for request in requests))
+
     def test_gateway_timeout_is_reported_as_request_timeout(self) -> None:
         gateway_timeout = type("InternalServerError", (Exception,), {"status_code": 504})
         result = DashboardChatService._safe_error(gateway_timeout("Gateway Timeout"))

@@ -38,6 +38,7 @@ class LocalModel:
     size_label: str
     memory_label: str
     files: tuple[ModelFile, ...]
+    context_size: int = 16_384
 
     @property
     def total_size(self) -> int:
@@ -46,9 +47,25 @@ class LocalModel:
 
 MODEL_CATALOG: tuple[LocalModel, ...] = (
     LocalModel(
+        identifier="qwen2.5-1.5b-q4",
+        name="Qwen 2.5 1.5B — Windows Fast",
+        description="Fastest supported option for CPU-only Windows; best for routine dashboard chat, summaries, and chart requests.",
+        size_label="1.1 GB download",
+        memory_label="About 2–3 GB RAM",
+        files=(
+            ModelFile(
+                filename="qwen2.5-1.5b-instruct-q4_k_m.gguf",
+                url="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+                sha256="6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+                size=1_117_320_736,
+            ),
+        ),
+        context_size=8_192,
+    ),
+    LocalModel(
         identifier="qwen2.5-3b-q4",
-        name="Qwen 2.5 3B — Fast",
-        description="Best responsiveness on the target 16 GB Windows computer; suitable for routine dashboard questions.",
+        name="Qwen 2.5 3B — Balanced",
+        description="Better language quality than the Windows Fast model, with slower responses on CPU-only computers.",
         size_label="2.1 GB download",
         memory_label="About 3–4 GB RAM",
         files=(
@@ -62,7 +79,7 @@ MODEL_CATALOG: tuple[LocalModel, ...] = (
     ),
     LocalModel(
         identifier="qwen2.5-7b-q4",
-        name="Qwen 2.5 7B — Balanced",
+        name="Qwen 2.5 7B — Quality (Slow)",
         description="Better summaries and tool selection, with slower CPU responses. Recommended when quality matters most.",
         size_label="4.7 GB download",
         memory_label="About 6–8 GB RAM",
@@ -98,6 +115,8 @@ MODEL_CATALOG: tuple[LocalModel, ...] = (
     ),
 )
 MODELS_BY_ID = {model.identifier: model for model in MODEL_CATALOG}
+WINDOWS_DEFAULT_MODEL_ID = "qwen2.5-1.5b-q4"
+DEFAULT_MODEL_ID = "qwen2.5-3b-q4"
 
 
 class DownloadCancelled(Exception):
@@ -124,8 +143,9 @@ class LocalAIManager:
         self.credential_store = credential_store
         self.models_dir = models_dir or user_data_directory() / "models"
         saved = settings.load()
-        candidate = str(saved.get("local_ai_model") or MODEL_CATALOG[0].identifier)
-        self.selected_id = candidate if candidate in MODELS_BY_ID else MODEL_CATALOG[0].identifier
+        platform_default = WINDOWS_DEFAULT_MODEL_ID if sys.platform == "win32" else DEFAULT_MODEL_ID
+        candidate = str(saved.get("local_ai_model") or platform_default)
+        self.selected_id = candidate if candidate in MODELS_BY_ID else platform_default
         self.port = int(port) if port else _free_loopback_port()
         self.process: subprocess.Popen[bytes] | None = None
         self.lock = threading.RLock()
@@ -597,7 +617,9 @@ class LocalAIManager:
             token = self._token()
             llama_server = None if self.python_runtime_available() else self._llama_server_path()
             if llama_server:
-                threads = max(2, min(12, (os.cpu_count() or 4) - 1))
+                max_threads = 8 if sys.platform == "win32" else 12
+                threads = max(2, min(max_threads, (os.cpu_count() or 4) - 1))
+                context_size = min(model.context_size, 8_192) if sys.platform == "win32" else model.context_size
                 command = [
                     llama_server,
                     "--model",
@@ -609,8 +631,10 @@ class LocalAIManager:
                     "--port",
                     str(self.port),
                     "--ctx-size",
-                    "16384",
+                    str(context_size),
                     "--threads",
+                    str(threads),
+                    "--threads-batch",
                     str(threads),
                     "--n-gpu-layers",
                     "99" if sys.platform == "darwin" else "0",

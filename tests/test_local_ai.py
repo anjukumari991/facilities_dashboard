@@ -51,6 +51,25 @@ class LocalAIManagerTests(unittest.TestCase):
         self.assertEqual(state["selected_model"], selected.identifier)
         self.assertEqual(self.settings.load()["local_ai_model"], selected.identifier)
 
+    def test_fresh_windows_install_defaults_to_lightweight_model(self) -> None:
+        root = Path(self.temporary.name) / "windows-default"
+        settings = SettingsStore(root / "settings.json")
+        with patch("local_ai.sys.platform", "win32"):
+            manager = LocalAIManager(settings, _Credentials(), root / "models", port=12483)
+        self.addCleanup(manager.shutdown)
+
+        self.assertEqual(manager.selected_id, "qwen2.5-1.5b-q4")
+
+    def test_existing_model_selection_is_preserved_on_windows(self) -> None:
+        root = Path(self.temporary.name) / "windows-existing"
+        settings = SettingsStore(root / "settings.json")
+        settings.update(local_ai_model="qwen2.5-3b-q4")
+        with patch("local_ai.sys.platform", "win32"):
+            manager = LocalAIManager(settings, _Credentials(), root / "models", port=12484)
+        self.addCleanup(manager.shutdown)
+
+        self.assertEqual(manager.selected_id, "qwen2.5-3b-q4")
+
     def test_complete_files_are_recognised_as_installed(self) -> None:
         model = LocalModel(
             identifier="tiny-test-model",

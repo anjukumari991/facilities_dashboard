@@ -6,8 +6,11 @@ import json
 import math
 import re
 import statistics
+from types import SimpleNamespace
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 from external_facts import ExternalFactsUnavailable, HolidayFactsClient
 from secure_storage import SecureCredentialStore
@@ -164,6 +167,143 @@ SUMMARY_SCHEMA: dict[str, Any] = {
     "required": list(SUMMARY_SECTIONS),
     "additionalProperties": False,
 }
+
+
+class _CompatibleAPIError(RuntimeError):
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class AuthenticationError(_CompatibleAPIError):
+    pass
+
+
+class PermissionDeniedError(_CompatibleAPIError):
+    pass
+
+
+class BadRequestError(_CompatibleAPIError):
+    pass
+
+
+class NotFoundError(_CompatibleAPIError):
+    pass
+
+
+class RateLimitError(_CompatibleAPIError):
+    pass
+
+
+class APIConnectionError(_CompatibleAPIError):
+    pass
+
+
+class APITimeoutError(_CompatibleAPIError):
+    pass
+
+
+class _APIObject(dict):
+    """Dictionary response with the attribute access used by the OpenAI SDK."""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def model_dump(self, *, exclude_none: bool = False) -> dict[str, Any]:
+        def plain(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {key: plain(item) for key, item in value.items() if not (exclude_none and item is None)}
+            if isinstance(value, list):
+                return [plain(item) for item in value]
+            return value
+
+        return plain(self)
+
+
+def _api_object(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _APIObject({key: _api_object(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return [_api_object(item) for item in value]
+    return value
+
+
+class _OpenAICompatibleHTTPClient:
+    """Dependency-free fallback for OpenAI-compatible HTTP endpoints."""
+
+    def __init__(self, token: str, endpoint: str):
+        self.token = token
+        self.endpoint = endpoint.rstrip("/")
+        self.models = SimpleNamespace(list=lambda: self._request("GET", "/models"))
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **payload: self._request("POST", "/chat/completions", payload))
+        )
+        self.responses = SimpleNamespace(create=lambda **payload: self._request("POST", "/responses", payload))
+
+    @staticmethod
+    def _error(status: int, message: str) -> _CompatibleAPIError:
+        error_types = {
+            400: BadRequestError,
+            401: AuthenticationError,
+            403: PermissionDeniedError,
+            404: NotFoundError,
+            429: RateLimitError,
+        }
+        return error_types.get(status, _CompatibleAPIError)(message, status)
+
+    @staticmethod
+    def _response_output_text(payload: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for item in payload.get("output", []) or []:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            for content in item.get("content", []) or []:
+                if isinstance(content, dict) and content.get("type") == "output_text":
+                    parts.append(str(content.get("text") or ""))
+        return "".join(parts)
+
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> _APIObject:
+        body = None if payload is None else json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        request = Request(
+            f"{self.endpoint}{path}",
+            data=body,
+            method=method,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "Facilities-Dashboard/1.0",
+            },
+        )
+        try:
+            response = urlopen(request)
+            with response:
+                raw = response.read()
+        except HTTPError as exc:
+            raw = exc.read(64_000)
+            try:
+                error_payload = json.loads(raw.decode("utf-8"))
+                error = error_payload.get("error", {}) if isinstance(error_payload, dict) else {}
+                message = str(error.get("message") or f"The AI endpoint returned HTTP {exc.code}.")
+            except (UnicodeDecodeError, ValueError):
+                message = f"The AI endpoint returned HTTP {exc.code}."
+            raise self._error(exc.code, message) from exc
+        except (URLError, OSError) as exc:
+            if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+                raise APITimeoutError("The AI endpoint did not finish the request in time.") from exc
+            raise APIConnectionError("The AI endpoint could not be reached.") from exc
+        try:
+            decoded = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise _CompatibleAPIError("The AI endpoint returned invalid JSON.") from exc
+        if not isinstance(decoded, dict):
+            raise _CompatibleAPIError("The AI endpoint returned an unsupported response.")
+        if path == "/responses" and not decoded.get("output_text"):
+            decoded["output_text"] = self._response_output_text(decoded)
+        return _api_object(decoded)
 
 
 def normalize_api_endpoint(value: Any) -> str:
@@ -1624,8 +1764,13 @@ class DashboardChatService:
                 return self.client_factory(token)
         try:
             from openai import OpenAI
-        except ImportError as exc:
-            raise RuntimeError("AI support is unavailable because the OpenAI component is not installed.") from exc
+        except (ImportError, OSError):
+            # The macOS bundle can still run on a second CPU architecture even
+            # when an optional compiled OpenAI SDK dependency cannot load.
+            # Local and custom OpenAI-compatible endpoints need only ordinary
+            # JSON HTTP, so retain full chat/summarisation support without the
+            # SDK instead of reporting that AI is unavailable.
+            return _OpenAICompatibleHTTPClient(token, endpoint)
         # Local CLI-backed models can take several minutes for larger
         # summaries. Do not impose a client-side deadline, and avoid retries
         # that could duplicate a still-running generation request.
@@ -1754,6 +1899,7 @@ class DashboardChatService:
         instructions: str,
         initial_input: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        max_output_tokens: int = 1_200,
     ) -> dict[str, Any]:
         input_items = list(initial_input)
         aggregate_queries = 0
@@ -1767,7 +1913,7 @@ class DashboardChatService:
                 tool_choice="auto" if tools else "none",
                 store=False,
                 reasoning={"effort": "low"},
-                max_output_tokens=1200,
+                max_output_tokens=max_output_tokens,
                 include=["reasoning.encrypted_content"],
             )
             calls = [item for item in response.output if _field(item, "type") == "function_call"]
@@ -1805,6 +1951,7 @@ class DashboardChatService:
         instructions: str,
         initial_input: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        max_output_tokens: int = 1_200,
     ) -> dict[str, Any]:
         messages = [{"role": "system", "content": instructions}, *initial_input]
         chat_tools = [
@@ -1824,7 +1971,7 @@ class DashboardChatService:
             request: dict[str, Any] = {
                 "model": model,
                 "messages": messages,
-                "max_tokens": 1200,
+                "max_tokens": max_output_tokens,
                 "temperature": 0.2,
             }
             if chat_tools:
@@ -1878,6 +2025,135 @@ class DashboardChatService:
                     }
                 )
         return {"ok": False, "code": "tool_loop_limit", "error": "AI support requested too many aggregate calculations. Try a narrower question."}
+
+    @staticmethod
+    def _summary_batches(
+        comments: list[dict[str, str]],
+        *,
+        maximum_characters: int = 10_000,
+        maximum_items: int = 40,
+    ) -> list[list[dict[str, str]]]:
+        """Keep local-model prompts small enough for responsive 8K inference."""
+        batches: list[list[dict[str, str]]] = []
+        current: list[dict[str, str]] = []
+        current_characters = 0
+        for comment in comments:
+            item_characters = len(comment.get("comment", "")) + len(comment.get("topic", "")) + 80
+            if current and (
+                len(current) >= maximum_items
+                or current_characters + item_characters > maximum_characters
+            ):
+                batches.append(current)
+                current = []
+                current_characters = 0
+            current.append(comment)
+            current_characters += item_characters
+        if current:
+            batches.append(current)
+        return batches
+
+    def _summarize_managed_batches(
+        self,
+        client: Any,
+        models: list[str],
+        instructions: str,
+        comments: list[dict[str, str]],
+        selection: str,
+        truncated: bool,
+    ) -> dict[str, Any]:
+        batches = self._summary_batches(comments)
+        batch_instructions = (
+            instructions
+            + " This is one batch from a larger survey selection. Consolidate themes within this batch only."
+        )
+        merge_instructions = (
+            "You merge partial facilities-survey summaries. Use only the supplied batch summaries. "
+            "Return only one valid JSON object with exactly these array keys: appreciations and employee_asks. "
+            "Each item must contain a concise 'point' string and integer 'mentions'. Combine duplicate or closely related "
+            "points and add their mention counts. Do not move requests for more, improved, fixed, or changed facilities "
+            "into appreciations. Do not invent themes. Return at most five distinct items per section."
+        )
+        for model_index, model in enumerate(models[:5]):
+            try:
+                partials: list[dict[str, Any]] = []
+                for batch_index, batch in enumerate(batches, start=1):
+                    batch_prompt = json.dumps(
+                        {
+                            "selection": selection or "all_surveys",
+                            "batch": batch_index,
+                            "batch_count": len(batches),
+                            "comment_count": len(batch),
+                            "comments": batch,
+                        },
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    )
+                    request: dict[str, Any] = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": batch_instructions},
+                            {"role": "user", "content": batch_prompt},
+                        ],
+                        "max_tokens": 700,
+                        "temperature": 0.1,
+                        "response_format": {"type": "json_object", "schema": SUMMARY_SCHEMA},
+                    }
+                    response = client.chat.completions.create(**request)
+                    choices = _field(response, "choices", []) or []
+                    if not choices:
+                        raise RuntimeError("The local AI endpoint returned no completion choices.")
+                    content = _field(_field(choices[0], "message"), "content", "") or ""
+                    if isinstance(content, list):
+                        content = "".join(str(_field(part, "text", "") or "") for part in content)
+                    partials.append(
+                        {
+                            "batch": batch_index,
+                            "comment_count": len(batch),
+                            "summary": _summary_payload(str(content), len(batch)),
+                        }
+                    )
+
+                merge_prompt = json.dumps(
+                    {
+                        "selection": selection or "all_surveys",
+                        "comment_count": len(comments),
+                        "batch_summaries": partials,
+                    },
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                )
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": merge_instructions},
+                        {"role": "user", "content": merge_prompt},
+                    ],
+                    max_tokens=800,
+                    temperature=0.1,
+                    response_format={"type": "json_object", "schema": SUMMARY_SCHEMA},
+                )
+                choices = _field(response, "choices", []) or []
+                if not choices:
+                    raise RuntimeError("The local AI endpoint returned no completion choices.")
+                answer = _field(_field(choices[0], "message"), "content", "") or ""
+                if isinstance(answer, list):
+                    answer = "".join(str(_field(part, "text", "") or "") for part in answer)
+                return {
+                    "ok": True,
+                    "summary": _summary_payload(str(answer), len(comments)),
+                    "comment_count": len(comments),
+                    "truncated": truncated,
+                    "model": model,
+                    "provider": "managed",
+                    "batches": len(batches),
+                }
+            except ValueError as exc:
+                return {"ok": False, "code": "invalid_summary", "error": str(exc)}
+            except Exception as exc:
+                if model_index < min(len(models), 5) - 1 and self._model_unavailable(exc):
+                    continue
+                return self._safe_error(exc)
+        return {"ok": False, "code": "model_unavailable", "error": "No compatible local AI model is available."}
 
     def summarize_survey_comments(self, survey_month: str | None = None) -> dict[str, Any]:
         active_provider = self.provider()
@@ -1970,6 +2246,16 @@ class DashboardChatService:
         except Exception as exc:
             return self._safe_error(exc)
 
+        if active_provider == "managed" and len(prompt) > 16_000:
+            return self._summarize_managed_batches(
+                client,
+                models,
+                instructions,
+                comments,
+                selection,
+                truncated,
+            )
+
         for index, model in enumerate(models[:5]):
             try:
                 if self._uses_responses_api(endpoint):
@@ -1989,7 +2275,7 @@ class DashboardChatService:
                             {"role": "system", "content": instructions},
                             {"role": "user", "content": prompt},
                         ],
-                        "max_tokens": 1600,
+                        "max_tokens": 900 if active_provider == "managed" else 1_600,
                         "temperature": 0.1,
                     }
                     if active_provider == "managed":
@@ -2176,7 +2462,14 @@ class DashboardChatService:
             return self._safe_error(exc)
         for index, model in enumerate(models[:5]):
             try:
-                result = runner(client, model, instructions, input_items, tools)
+                result = runner(
+                    client,
+                    model,
+                    instructions,
+                    input_items,
+                    tools,
+                    max_output_tokens=700 if active_provider == "managed" else 1_200,
+                )
                 if not result.get("ok"):
                     return result
                 model_aggregate_results = result.pop("_aggregate_results", [])
