@@ -1342,12 +1342,3 @@ window.addEventListener("pywebviewready",()=>{
   bootstrap();
 });
 setTimeout(()=>bootstrap(),1200);
-
-setInterval(()=>{
-  if(document.visibilityState==="visible"&&libraryState.configured){
-    const surveyTask=window.SurveyDashboard?.isBusy?.()?null:window.SurveyDashboard?.load?.();
-    const tasks=[surveyTask,window.WorkplaceDashboard?.load?.(),window.CollaborationDashboard?.load?.(),window.AuditReports?.load?.()];
-    if(libraryState.selected_id)tasks.push(loadData("Checking for workbook updates…"));
-    Promise.allSettled(tasks);
-  }
-},60000);
